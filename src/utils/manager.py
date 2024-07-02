@@ -74,7 +74,7 @@ class EmbeddingManager:
                         self.embedding_references[sample_id_int] = sample_id_int
 
         # Log the loaded index mapping for debugging
-        print(f"Loaded index mapping: {self.index_mapping}")
+        # print(f"Loaded index mapping: {self.index_mapping}")
 
     def get_embedding(self, sample_id):
         chunk_file, _ = self.index_mapping[sample_id]

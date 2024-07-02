@@ -56,33 +56,33 @@ class CDC_train(Dataset):
 
 
 class CDC_test(Dataset):
-    def __init__(self, annotation_path, image_path, preprocess, tokenizer):
+
+    def __init__(
+        self, annotation_path, image_path, preprocess, ratio=0.1
+    ):
         self.annotations = json.load(open(annotation_path))
+        self.annotations = self.annotations[: int(len(self.annotations) * ratio)]
         self.image_path = image_path
         self.vis_processors = preprocess
-        self.tokenizer = tokenizer
 
     def __len__(self):
         return len(self.annotations)
 
     def __getitem__(self, idx):
-        raw_image = Image.open(
-            os.path.join(self.image_path, self.annotations[idx]["image"])
-        ).convert("RGB")
+        annotation = self.annotations[idx]
+        img_path = os.path.join(self.image_path, annotation["image"])
+        raw_image = Image.open(img_path).convert("RGB")
         image_input = self.vis_processors(raw_image, return_tensors="pt")
         if "pixel_values" in image_input:
             image_input["pixel_values"] = image_input["pixel_values"].squeeze()
 
-        raw_text = self.annotations[idx]["caption"][:5]
-        text_input = self.tokenizer(
-            raw_text,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=77,
+        raw_text = (
+            self.annotations[idx]["caption"]
+            if type(self.annotations[idx]["caption"]) == str
+            else self.annotations[idx]["caption"][:]
         )
 
-        return image_input, text_input
+        return image_input, raw_text
 
 
 def test():

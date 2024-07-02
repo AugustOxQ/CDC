@@ -51,6 +51,40 @@ class CDC(nn.Module):
         
         # Combiner network to combine text and label features
         self.combiner = Combiner(512, 512, 512)
+        
+    def encode_img(self, images):
+        # Extract image features
+        img_emb = self.clip.get_image_features(**images)
+        return img_emb
+    
+    def encode_txt(self, texts):
+        # Extract text features
+        txt_emb = self.clip.get_text_features(**texts)
+        return txt_emb
+        
+    def encode_img_txt(self, images, texts):
+        # Extract image and text features
+        img_emb = self.clip.get_image_features(**images)
+        txt_emb = self.clip.get_text_features(**texts)
+        
+        return img_emb, txt_emb
+    
+    def combine_raw(self, texts, labels):
+        
+        txt_emb = self.clip.get_text_features(**texts) # (batch_size, 512)
+        
+        # Encode the labels
+        lbl_emb = self.label_encoder(labels) # (batch_size, 512)
+        comb_emb = self.combiner(txt_emb, lbl_emb) # (batch_size, 512)
+        
+        return comb_emb
+    
+    def combine(self, txt_emb, labels):
+        # Encode the labels
+        lbl_emb = self.label_encoder(labels) # (batch_size, 512)
+        comb_emb = self.combiner(txt_emb, lbl_emb) # (batch_size, 512)
+        
+        return comb_emb
 
     def forward(self, images, texts, labels):
         # Extract image and text features
@@ -58,8 +92,8 @@ class CDC(nn.Module):
         txt_emb = self.clip.get_text_features(**texts) # (batch_size, 512)
         
         # Encode the labels
-        # lbl_emb = self.label_encoder(labels) # (batch_size, 512)
-        lbl_emb = labels
+        lbl_emb = self.label_encoder(labels) # (batch_size, 512)
+        # lbl_emb = labels
         
         # Combine text and label features
         comb_emb = self.combiner(txt_emb, lbl_emb) # (batch_size, 512)

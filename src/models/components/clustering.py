@@ -103,7 +103,7 @@ def main():
 
     # Example usage
 
-    from src.data.imp_datamodule import EmbeddingManager, FolderManager
+    from src.data.cdc_datamodule import EmbeddingManager, FolderManager
     import json
 
     # Load annotations
