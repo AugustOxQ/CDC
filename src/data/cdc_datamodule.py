@@ -8,7 +8,7 @@ from PIL import Image, ImageFile
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from datasets import load_dataset, config
-
+import h5py
 from src.utils import EmbeddingManager, FolderManager
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True  # To handle truncated (corrupted) images
@@ -17,16 +17,53 @@ custom_download_path = "/data/SSD2/HF_datasets"
 config.HF_DATASETS_CACHE = custom_download_path
 
 
-class CDC_train(Dataset):
+# class CDC_train(Dataset):
+
+#     def __init__(
+#         self, annotation_path, image_path, preprocess, embedding_manager, ratio=0.1
+#     ):
+#         self.annotations = json.load(open(annotation_path))
+#         self.annotations = self.annotations[: int(len(self.annotations) * ratio)]
+#         self.image_path = image_path
+#         self.vis_processors = preprocess
+#         self.embedding_manager = embedding_manager
+
+#         # Assign unique numeric IDs to each sample
+#         self.sample_ids = {i: idx for idx, i in enumerate(range(len(self.annotations)))}
+
+#     def __len__(self):
+#         return len(self.annotations)
+
+#     def __getitem__(self, idx):
+#         annotation = self.annotations[idx]
+#         img_path = os.path.join(self.image_path, annotation["image"])
+#         raw_image = Image.open(img_path).convert("RGB")
+#         image_input = self.vis_processors(raw_image, return_tensors="pt")
+#         if "pixel_values" in image_input:
+#             image_input["pixel_values"] = image_input["pixel_values"].squeeze()
+
+#         raw_text = (
+#             self.annotations[idx]["caption"]
+#             if type(self.annotations[idx]["caption"]) == str
+#             else self.annotations[idx]["caption"][0]
+#         )
+
+#         sample_id = self.sample_ids[idx]
+#         embedding = self.embedding_manager.get_embedding(sample_id)
+#         label_embedding = torch.tensor(embedding, dtype=torch.float32)
+
+#         return image_input, raw_text, label_embedding, sample_id
+
+
+class FeatureExtractionDataset(Dataset):
 
     def __init__(
-        self, annotation_path, image_path, preprocess, embedding_manager, ratio=0.1
+        self, annotation_path, image_path, preprocess, ratio=0.1
     ):
         self.annotations = json.load(open(annotation_path))
         self.annotations = self.annotations[: int(len(self.annotations) * ratio)]
         self.image_path = image_path
         self.vis_processors = preprocess
-        self.embedding_manager = embedding_manager
 
         # Assign unique numeric IDs to each sample
         self.sample_ids = {i: idx for idx, i in enumerate(range(len(self.annotations)))}
@@ -49,11 +86,61 @@ class CDC_train(Dataset):
         )
 
         sample_id = self.sample_ids[idx]
+
+        return image_input, raw_text, sample_id
+
+class FeatureExtractionDataset__(Dataset):
+    def __init__(self, annotations, image_path, processor):
+        self.annotations = annotations
+        self.image_path = image_path
+        self.vis_processors = processor
+        
+        # Assign unique numeric IDs to each sample
+        self.sample_ids = {i: idx for idx, i in enumerate(range(len(self.annotations)))}
+
+    def __len__(self):
+        return len(self.annotations)
+
+    def __getitem__(self, idx):
+        annotation = self.annotations[idx]
+        img_path = os.path.join(self.image_path, annotation["image"])
+        raw_image = Image.open(img_path).convert("RGB")
+        image_input = self.vis_processors(raw_image, return_tensors="pt")
+        if "pixel_values" in image_input:
+            image_input["pixel_values"] = image_input["pixel_values"].squeeze()
+        
+        raw_text = (
+            self.annotations[idx]["caption"]
+            if type(self.annotations[idx]["caption"]) == str
+            else self.annotations[idx]["caption"][0]
+        )
+        
+        sample_id = self.sample_ids[idx]
+        return image_input, raw_text, sample_id
+
+class CDC_train_preextract(Dataset):
+    def __init__(self, annotation_path, image_path, embedding_manager, feature_manager, ratio=0.1):
+        self.annotations = json.load(open(annotation_path))
+        self.annotations = self.annotations[:int(len(self.annotations) * ratio)]
+        self.image_path = image_path
+        self.embedding_manager = embedding_manager
+        self.feature_manager = feature_manager
+
+    def __len__(self):
+        return len(self.annotations)
+
+    def __getitem__(self, idx):
+        annotation = self.annotations[idx]
+        
+        sample_id = idx
+        img_emb, txt_emb = self.feature_manager.get_feature(sample_id)
+        img_emb = torch.tensor(img_emb, dtype=torch.float32)
+        txt_emb = torch.tensor(txt_emb, dtype=torch.float32)
+        
         embedding = self.embedding_manager.get_embedding(sample_id)
         label_embedding = torch.tensor(embedding, dtype=torch.float32)
 
-        return image_input, raw_text, label_embedding, sample_id
-
+        return img_emb, txt_emb, label_embedding, sample_id
 
 class CDC_test(Dataset):
 

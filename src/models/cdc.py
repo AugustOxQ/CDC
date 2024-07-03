@@ -47,7 +47,9 @@ class CDC(nn.Module):
         self.clip = get_clip(clip_trainable)
         
         # The label encoder is a transformer encoder
-        self.label_encoder = TransformerEncoder(d_model, nhead, num_layers)
+        # self.label_encoder = TransformerEncoder(d_model, nhead, num_layers)
+        # Identity function for now
+        self.label_encoder = nn.Identity()
         
         # Combiner network to combine text and label features
         self.combiner = Combiner(512, 512, 512)
@@ -93,7 +95,6 @@ class CDC(nn.Module):
         
         # Encode the labels
         lbl_emb = self.label_encoder(labels) # (batch_size, 512)
-        # lbl_emb = labels
         
         # Combine text and label features
         comb_emb = self.combiner(txt_emb, lbl_emb) # (batch_size, 512)

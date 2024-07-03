@@ -20,11 +20,12 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoImageProcessor
 
 # Import local packages
-from src.data.cdc_datamodule import CDC_train, CDC_test
+from src.data.cdc_datamodule import CDC_test, FeatureExtractionDataset
+from src.data.cdc_datamodule import CDC_train_preextract as CDC_train
 from src.metric.loss import CosineLoss, MeanSquareLoss
 from src.models.cdc import CDC
 from src.models.components.clustering import Clustering
-from src.utils import EmbeddingManager, FolderManager, evalrank, calculate_n_clusters, plot_umap
+from src.utils import EmbeddingManager, FolderManager, evalrank, calculate_n_clusters, plot_umap, FeatureManager
 
 # Setup
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -37,7 +38,35 @@ def k_means_stop_condition():
     #TODO: Keep track of the diversity of the k-means centroids by calculating the mean of pairwise distances between the centroids. This can be an automatic way of deciding when to stop the clustering process.
     
     pass
-    
+
+
+def extract_and_store_features(annotation_path, image_path, feature_manager, batch_size, model, preprocess, tokenizer, device, ratio=0.1):
+
+    dataset = FeatureExtractionDataset(annotation_path, image_path, preprocess, ratio=ratio)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    model.eval()
+    with torch.no_grad():
+        for batch_id, batch in enumerate(tqdm(dataloader)):
+            images, raw_texts, sample_ids = batch
+            
+            image_input = images.to(device)
+            text_input = tokenizer(
+                raw_texts,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=77,
+            ).to(device)
+
+            with torch.no_grad():
+                img_emb, txt_emb = model.encode_img_txt(image_input, text_input)
+                img_emb, txt_emb = img_emb.cpu().numpy(), txt_emb.cpu().numpy()
+
+            for i, idx in enumerate(sample_ids):
+                feature_manager.add_features(int(idx), img_emb[i], txt_emb[i])
+                
+    # feature_manager.debug_print()
     
 def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], max_batches=5):
     # Read embeddings directly from the dataloader, compare with other mebeddings from the same batch
@@ -52,26 +81,21 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
             
             # Limit the number of batches to process
             if batch_id >= max_batches:
+                print(f"Epoch {epoch}: Stopping inference after {max_batches} batches")
                 break
             
-            image, raw_text, label_embedding, sample_id = batch
-            image_input = image.to(device)
-            text_input = tokenizer(
-                raw_text,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=77,
-            ).to(device)
-
-            label_embedding = label_embedding.to(device)
-            label_embedding_shuffled = label_embedding[torch.randperm(label_embedding.size(0))]
-            del image, raw_text
-
-            img_emb, txt_emb, lbl_emb, comb_emb = model.forward(
-                image_input, text_input, label_embedding
-            )
+            img_emb, txt_emb, label_embedding, sample_id = batch
             
+            img_emb = img_emb.to(device)
+            txt_emb = txt_emb.to(device)
+            label_embedding = label_embedding.to(device)
+            
+            label_embedding_shuffled = label_embedding[torch.randperm(label_embedding.size(0))]
+            
+            # Combine embeddings
+            comb_emb = model.combine(txt_emb, label_embedding)
+            
+            # Combine embeddings (shuffled)
             comb_emb_shuffled = model.combine(
                 txt_emb, label_embedding_shuffled
             )
@@ -115,7 +139,7 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
                     if i in top_k_indices[:k]:
                         total_precisions[k] += 1
                         
-            del img_emb, txt_emb, lbl_emb, comb_emb, comb_emb_shuffled, image_input, text_input, label_embedding, label_embedding_shuffled
+            del img_emb, txt_emb, label_embedding, comb_emb, comb_emb_shuffled, label_embedding_shuffled
             
             torch.cuda.empty_cache()
             
@@ -224,24 +248,31 @@ def train(cfg: DictConfig, **kwargs):
     }
     
     for batch_id, batch in enumerate(tqdm(train_dataloader)):
-        image, raw_text, label_embedding, sample_id = batch
+        # image, raw_text, label_embedding, sample_id = batch
 
-        image_input = image.to(device)
-        text_input = tokenizer(
-            raw_text,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=77,
-        ).to(device)
-
+        # image_input = image.to(device)
+        # text_input = tokenizer(
+        #     raw_text,
+        #     return_tensors="pt",
+        #     padding="max_length",
+        #     truncation=True,
+        #     max_length=77,
+        # ).to(device)
+        
+        # del image, raw_text
+        
+        img_emb, txt_emb, label_embedding, sample_id = batch
+        img_emb, txt_emb = img_emb.to(device), txt_emb.to(device)
+    
         label_embedding = nn.Parameter(label_embedding, requires_grad=True)
         label_embedding = label_embedding.to(device)
-        del image, raw_text
 
-        img_emb, txt_emb, lbl_emb, comb_emb = model.forward(
-            image_input, text_input, label_embedding
-        )
+        # img_emb, txt_emb, lbl_emb, comb_emb = model.forward(
+        #     image_input, text_input, label_embedding
+        # )
+        lbl_emb = model.label_encoder(label_embedding)
+        comb_emb = model.combine(txt_emb, label_embedding)
+        
         loss = criteria(img_emb, comb_emb)
         epoch_metrics["loss"] += loss.item()
         optimizer.zero_grad()
@@ -250,7 +281,7 @@ def train(cfg: DictConfig, **kwargs):
 
         # Save updated embeddings
         for ip, le in zip(sample_id, lbl_emb):
-            embedding_manager.update_embedding(ip, le.data)
+            embedding_manager.update_embedding(int(ip), le.data)
 
         # Log
         scheduler.step(epoch + batch_id / len(train_dataloader))
@@ -260,8 +291,8 @@ def train(cfg: DictConfig, **kwargs):
             )
 
         del (
-            image_input,
-            text_input,
+            # image_input,
+            # text_input,
             img_emb,
             txt_emb,
             lbl_emb,
@@ -285,12 +316,23 @@ def run(cfg: DictConfig, **kwargs):
 
     # Initialize FolderManager
     folder_manager = FolderManager(base_log_dir=cfg.dataset.log_path)
+    
+    # Initialize feature manager
+    feature_manager = FeatureManager('data/preextract', chunk_size=cfg.train.batch_size)
+    
+    if cfg.dataset.pre_extract:
+        print("##########Extracting and storing features##########")
+        extract_and_store_features(cfg.dataset.train_path, cfg.dataset.img_path, feature_manager, cfg.train.batch_size, model, preprocess, tokenizer, device, ratio = cfg.dataset.ratio)
+    else:
+        print("##########Loading pre-extracted features##########")
+        feature_manager.load_features()
 
     # Initialize experiment
     experiment_dir, init_dir, plot_dir = folder_manager.initialize_experiment(cfg.log_tag)
     checkpoint_dir, logs_dir = folder_manager.create_directories(experiment_dir)
 
     # Initialize embedding manager
+    print("##########Initializing Embedding Manager##########")
     annotations = json.load(open(cfg.dataset.train_path))
     annotations = annotations[: int(len(annotations) * cfg.dataset.ratio)]
     embedding_manager = EmbeddingManager(
@@ -307,8 +349,8 @@ def run(cfg: DictConfig, **kwargs):
     train_dataset = CDC_train(
         annotation_path=cfg.dataset.train_path,
         image_path=cfg.dataset.img_path,
-        preprocess=preprocess,
         embedding_manager=embedding_manager,
+        feature_manager=feature_manager,
         ratio=cfg.dataset.ratio,
     )
     
@@ -497,6 +539,7 @@ def run(cfg: DictConfig, **kwargs):
     # Save final model and merge history
     folder_manager.save_final_model(model, experiment_dir)
     folder_manager.save_merge_history(embedding_manager.merge_history, experiment_dir)
+    feature_manager.close()
     
     # Clean cuda cache
     del (

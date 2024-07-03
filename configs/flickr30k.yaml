@@ -1,4 +1,4 @@
-log_tag: "flickr30k-merge-label-test"
+log_tag: "flickr30k-preextracted"
 seed: 42
 
 dataset:
@@ -8,7 +8,8 @@ dataset:
   img_path: /data/SSD/flickr30k/images
   img_path_test: /data/SSD/flickr30k/images
   log_path: res
-  ratio: 0.2
+  ratio: 1
+  pre_extract: False
 
 model:
   num_dim: 512
@@ -17,7 +18,7 @@ model:
 train:
   # Basic
   max_epochs: 50 # Normally 6 for fine-tuning, 30 for training from scratch
-  lr: 1e-5
+  lr: 1e-6
   weight_decay: 5e-2
   betas: [0.9, 0.999]
   # Scheduler
@@ -26,7 +27,7 @@ train:
   # Dataset
   batch_size: 1024
   num_workers: 8
-  log_interval: 5
+  log_interval: 10
   # Label update warm-up
 
 train_2:
@@ -47,5 +48,5 @@ control:
   train_2: True # K-means
   val: True # Test label embedding in the training set
   test: True # Test label embedding in the test set
-  save: True
+  save: False
   save_interval: 1

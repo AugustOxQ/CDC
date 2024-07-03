@@ -11,6 +11,53 @@ import torch
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+class FeatureManager:
+    def __init__(self, hdf5_dir, chunk_size):
+        self.hdf5_dir = hdf5_dir
+        self.chunk_size = chunk_size
+        self.index_mapping = {}
+        self.feature_references = []
+
+    def add_features(self, sample_id, img_feature, txt_feature):
+        chunk_file, chunk_idx = self._get_chunk_file_and_idx(sample_id)
+        with h5py.File(chunk_file, 'a') as hdf5_file:
+            if 'img_features' not in hdf5_file:
+                hdf5_file.create_dataset('img_features', (self.chunk_size, img_feature.shape[0]), dtype='float32')
+            if 'txt_features' not in hdf5_file:
+                hdf5_file.create_dataset('txt_features', (self.chunk_size, txt_feature.shape[0]), dtype='float32')
+            hdf5_file['img_features'][chunk_idx] = img_feature
+            hdf5_file['txt_features'][chunk_idx] = txt_feature
+            hdf5_file['sample_ids'][chunk_idx] = sample_id
+        self.feature_references.append((chunk_file, chunk_idx))
+        self.index_mapping[sample_id] = (chunk_file, chunk_idx)
+        
+    def load_features(self):
+        for file_name in os.listdir(self.hdf5_dir):
+            if file_name.endswith(".h5"):
+                chunk_file = os.path.join(self.hdf5_dir, file_name)
+                with h5py.File(chunk_file, 'r') as hdf5_file:
+                    sample_ids = hdf5_file['sample_ids'][:]
+                    for idx, sample_id in enumerate(sample_ids):
+                        self.index_mapping[int(sample_id)] = (chunk_file, idx)
+
+    def get_feature(self, sample_id):
+        if int(sample_id) not in self.index_mapping:
+            raise KeyError(f"Sample ID {sample_id} not found in index mapping.")
+        
+        chunk_file, chunk_idx = self.index_mapping[sample_id]
+        with h5py.File(chunk_file, 'r') as hdf5_file:
+            return hdf5_file['img_features'][chunk_idx], hdf5_file['txt_features'][chunk_idx]
+
+    def _get_chunk_file_and_idx(self, sample_id):
+        chunk_idx = sample_id % self.chunk_size
+        chunk_file = os.path.join(self.hdf5_dir, f'chunk_{sample_id // self.chunk_size}.h5')
+        return chunk_file, chunk_idx
+    
+    def debug_print(self):
+        print(f"Index Mapping: {self.index_mapping}")
+        
+    def close(self):
+        pass
 
 class EmbeddingManager:
     def __init__(
