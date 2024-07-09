@@ -155,3 +155,4 @@ configs/local/default.yaml
 outputs/
 res/
 logs/
+data/
