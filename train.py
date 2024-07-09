@@ -120,12 +120,12 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
             )
             
             # Test 1: Whether cosine_sim_comb is greater than cosine_sim_raw
-            comparison_raw = cosine_sim_comb >= cosine_sim_raw
+            comparison_raw = cosine_sim_comb > cosine_sim_raw
             raw_better_count = np.sum(comparison_raw)
             total_raw_better_count += raw_better_count
 
             # Test 2: Whether cosine_sim_comb is greater than cosine_sim_comb_shuffled
-            comparison_shuffled = cosine_sim_comb >= cosine_sim_comb_shuffled
+            comparison_shuffled = cosine_sim_comb > cosine_sim_comb_shuffled
             shuffled_better_count = np.sum(comparison_shuffled)
             total_shuffled_better_count += shuffled_better_count
 
@@ -165,7 +165,7 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
 
 def inference_test(model, tokenizer, dataloader, embedding_manager, device, epoch, Ks=[1, 5, 10]):
     # Load unique label embeddings
-    unique_labels = list(embedding_manager.index_mapping.keys())
+    unique_labels = list(embedding_manager.index_mapping.keys())[:50]
     label_embeddings = torch.stack([embedding_manager.get_embedding(sample_id) for sample_id in unique_labels]).to(device)
     
     model.eval()
@@ -318,7 +318,7 @@ def run(cfg: DictConfig, **kwargs):
     folder_manager = FolderManager(base_log_dir=cfg.dataset.log_path)
     
     # Initialize feature manager
-    feature_manager = FeatureManager('data/preextract', chunk_size=cfg.train.batch_size)
+    feature_manager = FeatureManager(cfg.dataset.extract_path, chunk_size=cfg.train.batch_size)
     
     if cfg.dataset.pre_extract:
         print("##########Extracting and storing features##########")
@@ -522,6 +522,7 @@ def run(cfg: DictConfig, **kwargs):
             
             
         if cfg.control.test:
+            print("Unique embeddings: ", len(embedding_manager.index_mapping))
             if len(embedding_manager.index_mapping) <= cfg.eval.max_clusters:
                 print("##########Testing test dataset##########")
                 inf_test_log = inference_test(model, tokenizer, test_dataloader, embedding_manager, device, epoch, [1, 5, 10])

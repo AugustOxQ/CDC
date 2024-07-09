@@ -10,6 +10,7 @@ dataset:
   log_path: res
   ratio: 1
   pre_extract: False
+  extract_path: data/pre_flickr30k
 
 model:
   num_dim: 512
@@ -35,13 +36,13 @@ train_2:
   initial_n_clusters: 10 # N - initial_n_clusters
   first_stage_n: 50 # Decay using sigmoid till this number of clusters
   second_stage_n: 5 # Decay * 0.8 till this number of clusters
-  k_means_start_epoch: 10 # Start K-means from this epoch
+  k_means_start_epoch: 20 # Start K-means from this epoch
   k_means_slow_epoch: 40 # Slow down K-means decay from this epoch
 
 eval:
   batch_size: 1024
   num_workers: 8
-  max_clusters: 100
+  max_clusters: 50
 
 control:
   train: True # Network

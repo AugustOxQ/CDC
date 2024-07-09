@@ -14,6 +14,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class FeatureManager:
     def __init__(self, hdf5_dir, chunk_size):
         self.hdf5_dir = hdf5_dir
+        # Create directory for HDF5 files if it does not exist
+        os.makedirs(self.hdf5_dir, exist_ok=True)
         self.chunk_size = chunk_size
         self.index_mapping = {}
         self.feature_references = []
@@ -25,6 +27,8 @@ class FeatureManager:
                 hdf5_file.create_dataset('img_features', (self.chunk_size, img_feature.shape[0]), dtype='float32')
             if 'txt_features' not in hdf5_file:
                 hdf5_file.create_dataset('txt_features', (self.chunk_size, txt_feature.shape[0]), dtype='float32')
+            if 'sample_ids' not in hdf5_file:
+                hdf5_file.create_dataset('sample_ids', (self.chunk_size,), dtype='int32')
             hdf5_file['img_features'][chunk_idx] = img_feature
             hdf5_file['txt_features'][chunk_idx] = txt_feature
             hdf5_file['sample_ids'][chunk_idx] = sample_id
