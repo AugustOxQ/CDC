@@ -166,7 +166,7 @@ class CDC_test(Dataset):
         raw_text = (
             self.annotations[idx]["caption"]
             if type(self.annotations[idx]["caption"]) == str
-            else self.annotations[idx]["caption"][:]
+            else self.annotations[idx]["caption"][0]
         )
 
         return image_input, raw_text

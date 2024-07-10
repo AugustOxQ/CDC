@@ -74,7 +74,7 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
     total_raw_better_count = 0
     total_shuffled_better_count = 0
     total_samples = 0
-    total_precisions = {k: 0.0 for k in Ks}
+    # total_precisions = {k: 0.0 for k in Ks}
 
     with torch.no_grad():
         for batch_id, batch in enumerate(tqdm(dataloader)):
@@ -105,19 +105,19 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
             cosine_sim_raw = cosine_similarity(
                 img_emb.cpu().numpy(),
                 txt_emb.cpu().numpy()
-            )
+            ).diagonal()
             
             # Calculate cosine similarity between image and combined embeddings
             cosine_sim_comb = cosine_similarity(
                 img_emb.cpu().numpy(),
                 comb_emb.cpu().numpy()
-            )
+            ).diagonal()
             
             # Calculate cosine similarity between image and combined embeddings (shuffled)
             cosine_sim_comb_shuffled = cosine_similarity(
                 img_emb.cpu().numpy(),
                 comb_emb_shuffled.cpu().numpy()
-            )
+            ).diagonal()
             
             # Test 1: Whether cosine_sim_comb is greater than cosine_sim_raw
             comparison_raw = cosine_sim_comb > cosine_sim_raw
@@ -129,63 +129,55 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
             shuffled_better_count = np.sum(comparison_shuffled)
             total_shuffled_better_count += shuffled_better_count
 
-            # Test 3: Precision and Recall@K of cosine_sim_comb
+            # # Test 3: Precision and Recall@K of cosine_sim_comb
             batch_size = cosine_sim_comb.shape[0]
             total_samples += batch_size
 
-            for i in range(batch_size):
-                top_k_indices = np.argsort(-cosine_sim_comb[i])[:max(Ks)]
-                for k in Ks:
-                    if i in top_k_indices[:k]:
-                        total_precisions[k] += 1
+            # for i in range(batch_size):
+            #     top_k_indices = np.argsort(-cosine_sim_comb[i])[:max(Ks)]
+            #     for k in Ks:
+            #         if i in top_k_indices[:k]:
+            #             total_precisions[k] += 1
                         
             del img_emb, txt_emb, label_embedding, comb_emb, comb_emb_shuffled, label_embedding_shuffled
             
             torch.cuda.empty_cache()
             
-    # Compute precision@K
-    for k in Ks:
-        total_precisions[k] /= (total_samples * k)
+    # # Compute precision@K
+    # for k in Ks:
+    #     total_precisions[k] /= (total_samples * k)
     
     # Calculate percentage of better label embeddings
-    raw_better_percentage = total_raw_better_count / (total_samples * cosine_sim_comb.shape[1]) * 100
-    shuffled_better_percentage = total_shuffled_better_count / (total_samples * cosine_sim_comb.shape[1]) * 100
+    raw_better_percentage = total_raw_better_count / total_samples * 100
+    shuffled_better_percentage = total_shuffled_better_count / total_samples * 100
     
     print(f"Epoch {epoch}: Combined embeddings better than raw embeddings: {raw_better_percentage:.2f}%")
     print(f"Epoch {epoch}: Combined embeddings better than shuffled embeddings: {shuffled_better_percentage:.2f}%")
-    for k in Ks:
-        print(f'Epoch {epoch}: Precision@{k}: {total_precisions[k] * 100:.2f}%')
+    # for k in Ks:
+    #     print(f'Epoch {epoch}: Precision@{k}: {total_precisions[k] * 100:.2f}%')
 
     return {
         "raw_better_percentage": raw_better_percentage,
         "shuffled_better_percentage": shuffled_better_percentage,
-        "precisions": total_precisions
+        # "precisions": total_precisions
     }
 
 
-def inference_test(model, tokenizer, dataloader, embedding_manager, device, epoch, Ks=[1, 5, 10]):
+def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch, Ks=[1, 5, 10]):
     # Load unique label embeddings
-    unique_labels = list(embedding_manager.index_mapping.keys())[:50]
-    label_embeddings = torch.stack([embedding_manager.get_embedding(sample_id) for sample_id in unique_labels]).to(device)
-    
-    model.eval()
+    label_embeddings = label_embeddings[:50]    
     total_samples = 0
     total_better_count = 0
 
+    model.eval()
     with torch.no_grad():
         for batch_id, batch in enumerate(tqdm(dataloader)):
             image, raw_text = batch
             image_input = image.to(device)
-            batch_size = image_input.size(0)
-            num_texts = 5 if len(raw_text[0]) == 5 else 1
-            tmp_text_input = []
-            
-            for b in range(batch_size):
-                for i in range(num_texts):
-                    tmp_text_input.append(raw_text[i][b])
+            batch_size = image_input["pixel_values"].size(0)
                     
             text_input = tokenizer(
-                tmp_text_input,
+                raw_text,
                 return_tensors="pt",
                 padding="max_length",
                 truncation=True,
@@ -193,42 +185,40 @@ def inference_test(model, tokenizer, dataloader, embedding_manager, device, epoc
             ).to(device)
 
             img_emb, txt_emb = model.encode_img_txt(image_input, text_input)
-
-            comb_emb_list = []
-            for label_embedding in label_embeddings:
-                comb_emb = model.comb(txt_emb, label_embedding.unsqueeze(0).expand(len(text_input), -1))
-                comb_emb_list.append(comb_emb)
             
-            comb_emb_list = torch.cat(comb_emb_list, dim=1)
+            # Convert PyTorch tensors to NumPy arrays
+            img_emb_np = img_emb.cpu().numpy()
+            txt_emb_np = txt_emb.cpu().numpy()
 
-            # Calculate cosine similarity within batch
-            cosine_sim_comb = cosine_similarity(
-                img_emb.cpu().numpy(),
-                comb_emb_list.cpu().numpy()
-            )
+            best_cosine_sim = np.full(batch_size, -1.0)  # Initialize with -1
+            # best_label_embeddings = np.zeros((batch_size, label_embeddings.size(1)))
 
-            # Compare the highest cosine similarity
-            for b in range(batch_size):
-                txt_emb = txt_emb[b*num_texts:(b+1)*num_texts]
-                cosine_sim_raw = cosine_similarity(
-                    img_emb[b].unsqueeze(0).cpu().numpy(),
-                    txt_emb.cpu().numpy()
-                )
-                raw_better_count = np.sum(np.max(cosine_sim_comb[b].reshape(num_texts, -1), axis=1) > np.max(cosine_sim_raw, axis=1))
-                total_better_count += raw_better_count
-                
+            for label_embedding in label_embeddings:
+                label_embedding = label_embedding.to(device)
+                comb_emb = model.combine(txt_emb, label_embedding.unsqueeze(0).expand(txt_emb.size(0), -1))
+
+                # Calculate cosine similarity within batch using NumPy
+                comb_emb_np = comb_emb.cpu().numpy()
+                cosine_sim_comb = cosine_similarity(img_emb_np, comb_emb_np)
+
+            # Update best cosine similarity and corresponding label embeddings
+                for i in range(batch_size):
+                    max_cosine_sim_comb = np.max(cosine_sim_comb[i])
+                    if max_cosine_sim_comb > best_cosine_sim[i]:
+                        best_cosine_sim[i] = max_cosine_sim_comb
+            # Compare best cosine similarity with raw cosine similarity
+            cosine_sim_raw = cosine_similarity(img_emb_np, txt_emb_np).diagonal()
+            
+            total_better_count += np.sum(best_cosine_sim > cosine_sim_raw)
             total_samples += batch_size
             
-            del img_emb, txt_emb, comb_emb_list, image_input, text_input
+            del img_emb, txt_emb, image_input, text_input, comb_emb, label_embedding
+            
+            torch.cuda.empty_cache()
             
     # Compute and print aggregated results
     better_percentage = total_better_count / total_samples * 100
-
-    print(f"Epoch {epoch}: Combined embeddings better than raw embeddings: {better_percentage:.2f}%")
-
-    return {
-        "better_percentage": better_percentage
-    }
+    print(f"Inference Test - Percentage of better cosine similarity: {better_percentage:.2f}%")
 
 def train(cfg: DictConfig, **kwargs):
     model = kwargs["model"]
@@ -248,18 +238,6 @@ def train(cfg: DictConfig, **kwargs):
     }
     
     for batch_id, batch in enumerate(tqdm(train_dataloader)):
-        # image, raw_text, label_embedding, sample_id = batch
-
-        # image_input = image.to(device)
-        # text_input = tokenizer(
-        #     raw_text,
-        #     return_tensors="pt",
-        #     padding="max_length",
-        #     truncation=True,
-        #     max_length=77,
-        # ).to(device)
-        
-        # del image, raw_text
         
         img_emb, txt_emb, label_embedding, sample_id = batch
         img_emb, txt_emb = img_emb.to(device), txt_emb.to(device)
@@ -267,9 +245,6 @@ def train(cfg: DictConfig, **kwargs):
         label_embedding = nn.Parameter(label_embedding, requires_grad=True)
         label_embedding = label_embedding.to(device)
 
-        # img_emb, txt_emb, lbl_emb, comb_emb = model.forward(
-        #     image_input, text_input, label_embedding
-        # )
         lbl_emb = model.label_encoder(label_embedding)
         comb_emb = model.combine(txt_emb, label_embedding)
         
@@ -291,8 +266,6 @@ def train(cfg: DictConfig, **kwargs):
             )
 
         del (
-            # image_input,
-            # text_input,
             img_emb,
             txt_emb,
             lbl_emb,
@@ -521,11 +494,23 @@ def run(cfg: DictConfig, **kwargs):
             logger_epoch["inference_train"] = inf_train_log
             
             
-        if cfg.control.test:
-            print("Unique embeddings: ", len(embedding_manager.index_mapping))
-            if len(embedding_manager.index_mapping) <= cfg.eval.max_clusters:
+        if cfg.control.test:            
+            # Determine the number of clusters
+            label_embedding = torch.stack(
+                    [
+                        embedding_manager.get_proxy_embedding(sample_id)
+                        for sample_id in range(len(train_dataset))
+                    ]
+                )
+
+            # Identify unique embeddings
+            unique_embeddings, _ = torch.unique(
+                label_embedding, return_inverse=True, dim=0
+            )
+            print(f"Unique embeddings: {unique_embeddings.size(0)}")
+            if unique_embeddings.size(0) <= cfg.eval.max_clusters:
                 print("##########Testing test dataset##########")
-                inf_test_log = inference_test(model, tokenizer, test_dataloader, embedding_manager, device, epoch, [1, 5, 10])
+                inf_test_log = inference_test(model, tokenizer, test_dataloader, unique_embeddings, device, epoch, [1, 5, 10])
                 logger_epoch["inference_test"] = inf_test_log
 
             
