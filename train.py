@@ -7,6 +7,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 import random
 
 import hydra
+import wandb
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -38,6 +40,24 @@ def k_means_stop_condition():
     #TODO: Keep track of the diversity of the k-means centroids by calculating the mean of pairwise distances between the centroids. This can be an automatic way of deciding when to stop the clustering process.
     
     pass
+
+
+def random_sample_with_replacement(label_embedding):
+    size = label_embedding.size(0)
+    random_indices = torch.randint(0, size, (size,))
+    
+    # Ensure that sampled index is not the same as the original
+    for i in range(size):
+        while random_indices[i] == i:
+            random_indices[i] = torch.randint(0, size, (1,))
+    
+    return label_embedding[random_indices]
+
+
+def compute_recall_at_k(similarities, k):
+    top_k_indices = np.argsort(-similarities, axis=1)[:, :k]
+    correct_at_k = np.sum(top_k_indices == np.arange(similarities.shape[0])[:, None])
+    return correct_at_k / similarities.shape[0]
 
 
 def extract_and_store_features(annotation_path, image_path, feature_manager, batch_size, model, preprocess, tokenizer, device, ratio=0.1):
@@ -90,7 +110,9 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
             txt_emb = txt_emb.to(device)
             label_embedding = label_embedding.to(device)
             
-            label_embedding_shuffled = label_embedding[torch.randperm(label_embedding.size(0))]
+            # Shuffle label embeddings
+            # label_embedding_shuffled = label_embedding[torch.randperm(label_embedding.size(0))]
+            label_embedding_shuffled = random_sample_with_replacement(label_embedding)
             
             # Combine embeddings
             comb_emb = model.combine(txt_emb, label_embedding)
@@ -132,12 +154,6 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
             # # Test 3: Precision and Recall@K of cosine_sim_comb
             batch_size = cosine_sim_comb.shape[0]
             total_samples += batch_size
-
-            # for i in range(batch_size):
-            #     top_k_indices = np.argsort(-cosine_sim_comb[i])[:max(Ks)]
-            #     for k in Ks:
-            #         if i in top_k_indices[:k]:
-            #             total_precisions[k] += 1
                         
             del img_emb, txt_emb, label_embedding, comb_emb, comb_emb_shuffled, label_embedding_shuffled
             
@@ -157,17 +173,23 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
     #     print(f'Epoch {epoch}: Precision@{k}: {total_precisions[k] * 100:.2f}%')
 
     return {
-        "raw_better_percentage": raw_better_percentage,
-        "shuffled_better_percentage": shuffled_better_percentage,
+        "val/raw_better_percentage": raw_better_percentage,
+        "val/shuffled_better_percentage": shuffled_better_percentage,
         # "precisions": total_precisions
     }
 
 
 def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch, Ks=[1, 5, 10]):
     # Load unique label embeddings
-    label_embeddings = label_embeddings[:50]    
+    label_embeddings = label_embeddings[:50]
+    
     total_samples = 0
     total_better_count = 0
+    total_improvement = 0.0
+    
+    all_img_emb = []
+    all_txt_emb = []
+    all_best_comb_emb = []
 
     model.eval()
     with torch.no_grad():
@@ -191,13 +213,13 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
             txt_emb_np = txt_emb.cpu().numpy()
 
             best_cosine_sim = np.full(batch_size, -1.0)  # Initialize with -1
-            # best_label_embeddings = np.zeros((batch_size, label_embeddings.size(1)))
+            best_comb_emb = np.zeros((batch_size, label_embeddings.size(1)))
 
             for label_embedding in label_embeddings:
                 label_embedding = label_embedding.to(device)
                 comb_emb = model.combine(txt_emb, label_embedding.unsqueeze(0).expand(txt_emb.size(0), -1))
 
-                # Calculate cosine similarity within batch using NumPy
+                # Calculate cosine similarity within batch using np instead of torch to save memory
                 comb_emb_np = comb_emb.cpu().numpy()
                 cosine_sim_comb = cosine_similarity(img_emb_np, comb_emb_np)
 
@@ -206,19 +228,56 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
                     max_cosine_sim_comb = np.max(cosine_sim_comb[i])
                     if max_cosine_sim_comb > best_cosine_sim[i]:
                         best_cosine_sim[i] = max_cosine_sim_comb
+                        best_comb_emb[i] = comb_emb_np[i]
+
             # Compare best cosine similarity with raw cosine similarity
             cosine_sim_raw = cosine_similarity(img_emb_np, txt_emb_np).diagonal()
             
             total_better_count += np.sum(best_cosine_sim > cosine_sim_raw)
             total_samples += batch_size
             
+            # Calculate improvement
+            improvement = (best_cosine_sim - cosine_sim_raw) / cosine_sim_raw
+            total_improvement += np.sum(improvement)
+            
+            # Accumulate embeddings for recall calculation
+            all_img_emb.append(img_emb_np)
+            all_txt_emb.append(txt_emb_np)
+            all_best_comb_emb.append(best_comb_emb)
+            
             del img_emb, txt_emb, image_input, text_input, comb_emb, label_embedding
             
             torch.cuda.empty_cache()
             
+    # Concatenate all accumulated embeddings
+    all_img_emb = np.concatenate(all_img_emb, axis=0)
+    all_txt_emb = np.concatenate(all_txt_emb, axis=0)
+    all_best_comb_emb = np.concatenate(all_best_comb_emb, axis=0)
+
+    # Compute cosine similarities globally
+    cosine_sim_raw_global = cosine_similarity(all_img_emb, all_txt_emb)
+    cosine_sim_comb_global = cosine_similarity(all_img_emb, all_best_comb_emb)
+    
+    # Compute recall@k globally
+    recalls_raw = {k: compute_recall_at_k(cosine_sim_raw_global, k) for k in [1, 5, 10]}
+    recalls_comb = {k: compute_recall_at_k(cosine_sim_comb_global, k) for k in [1, 5, 10]}
+            
     # Compute and print aggregated results
     better_percentage = total_better_count / total_samples * 100
+    avg_improvement = total_improvement / total_samples * 100
     print(f"Inference Test - Percentage of better cosine similarity: {better_percentage:.2f}%")
+    print(f"Inference Test - Average improvement over raw cosine similarity: {avg_improvement:.2f}%")
+    
+    for k in [1, 5, 10]:
+        print(f"Inference Test - Recall@{k} for cosine_sim_raw: {recalls_raw[k] * 100:.2f}%")
+        print(f"Inference Test - Recall@{k} for cosine_sim_comb: {recalls_comb[k] * 100:.2f}%")
+    
+    return {
+        "test/better_percentage": better_percentage,
+        "test/avg_improvement": avg_improvement,
+        "test/recalls_raw": recalls_raw,
+        "test/recalls_comb": recalls_comb
+    }
 
 def train(cfg: DictConfig, **kwargs):
     model = kwargs["model"]
@@ -264,6 +323,14 @@ def train(cfg: DictConfig, **kwargs):
             print(
                 f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}"
             )
+            
+        # Wandb logger
+        wandb.log(
+            {
+                "train/total_loss": loss.item(),
+                "train/lr": optimizer.param_groups[0]["lr"],
+            },
+        )
 
         del (
             img_emb,
@@ -406,9 +473,10 @@ def run(cfg: DictConfig, **kwargs):
 
             # Update the embedding manager's hdf5_dir to the new directory
             embedding_manager.hdf5_dir = new_hdf5_dir
-
+    
         if cfg.control.train_2: # KMeans update
             n_clusters = calculate_n_clusters(initial_n_clusters, first_stage_n, second_stage_n, epoch, k_means_start_epoch, k_means_slow_epoch)
+            wandb.log({"train/n_clusters": n_clusters})
             
             if n_clusters == 0:
                 print("##########No clustering performed##########")
@@ -491,8 +559,8 @@ def run(cfg: DictConfig, **kwargs):
         if cfg.control.val:
             print("##########Testing train dataset##########")
             inf_train_log = inference_train(model, tokenizer, train_dataloader, device, epoch, [1, 5, 10])
+            wandb.log(inf_train_log)
             logger_epoch["inference_train"] = inf_train_log
-            
             
         if cfg.control.test:            
             # Determine the number of clusters
@@ -502,7 +570,6 @@ def run(cfg: DictConfig, **kwargs):
                         for sample_id in range(len(train_dataset))
                     ]
                 )
-
             # Identify unique embeddings
             unique_embeddings, _ = torch.unique(
                 label_embedding, return_inverse=True, dim=0
@@ -512,6 +579,7 @@ def run(cfg: DictConfig, **kwargs):
                 print("##########Testing test dataset##########")
                 inf_test_log = inference_test(model, tokenizer, test_dataloader, unique_embeddings, device, epoch, [1, 5, 10])
                 logger_epoch["inference_test"] = inf_test_log
+                wandb.log(inf_test_log)
 
             
         # Save model, epoch, optimizer, scheduler
@@ -524,7 +592,7 @@ def run(cfg: DictConfig, **kwargs):
 
     # Save final model and merge history
     folder_manager.save_final_model(model, experiment_dir)
-    folder_manager.save_merge_history(embedding_manager.merge_history, experiment_dir)
+    # folder_manager.save_merge_history(embedding_manager.merge_history, experiment_dir)
     feature_manager.close()
     
     # Clean cuda cache
@@ -541,7 +609,7 @@ def run(cfg: DictConfig, **kwargs):
     return logger
 
 
-@hydra.main(config_path="configs", config_name="flickr30k", version_base=None)
+@hydra.main(config_path="configs", config_name="coco", version_base=None)
 def main(cfg):
     seed = cfg.seed
     np.random.seed(seed)
@@ -549,6 +617,10 @@ def main(cfg):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    
+    project = cfg.wandb.project
+    entity = cfg.wandb.entity
+    tags = cfg.wandb.tags
 
     # Print config
     print(OmegaConf.to_yaml(cfg))
@@ -558,8 +630,11 @@ def main(cfg):
     logger_dir = f"logs/{now}_{cfg.log_tag}"
     os.mkdir(logger_dir)
     OmegaConf.save(config=cfg, f=os.path.join(logger_dir, "config.yaml"))
+    wandb.init(project=project, entity=entity, tags=tags)
     logger = run(cfg=cfg, logger_dir=logger_dir)
     json.dump(logger, open(os.path.join(logger_dir, "logger.json"), "w"))
+    
+    wandb.finish()
 
 
 if __name__ == "__main__":
