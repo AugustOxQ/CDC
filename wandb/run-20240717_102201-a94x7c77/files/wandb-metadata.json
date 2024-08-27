@@ -1,0 +1,208 @@
+{
+    "os": "Linux-6.5.0-41-generic-x86_64-with-glibc2.35",
+    "python": "3.9.18",
+    "heartbeatAt": "2024-07-17T08:22:01.588716",
+    "startedAt": "2024-07-17T08:22:01.169137",
+    "docker": null,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "/project/Deep-Clustering/train.py",
+    "codePathLocal": "train.py",
+    "codePath": "train.py",
+    "git": {
+        "remote": "https://github.com/AugustOxQ/CDC.git",
+        "commit": "09f5ab68c9a2a7bd53d7b139186ad54618466a99"
+    },
+    "email": "w.ding@uva.nl",
+    "root": "/project/Deep-Clustering",
+    "host": "6a7b9e67a305",
+    "username": "root",
+    "executable": "/opt/conda/envs/deepclustering/bin/python",
+    "cpu_count": 16,
+    "cpu_count_logical": 32,
+    "cpu_freq": {
+        "current": 2922.6544687500004,
+        "min": 2200.0,
+        "max": 3400.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 4560.696,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3838.215,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3794.187,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2800.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3000.444,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3694.174,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3567.021,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3591.693,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3773.945,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 4338.706,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 4739.94,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3353.886,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2873.168,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 4778.817,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3313.918,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 4373.868,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3400.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 3550.008,
+            "min": 2200.0,
+            "max": 3400.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3400.0
+        }
+    ],
+    "disk": {
+        "/": {
+            "total": 937.3305015563965,
+            "used": 679.7693405151367
+        }
+    },
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "gpu_count": 1,
+    "gpu_devices": [
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25769803776
+        }
+    ],
+    "memory": {
+        "total": 62.69572448730469
+    }
+}

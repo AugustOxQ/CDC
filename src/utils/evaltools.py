@@ -93,7 +93,7 @@ def calculate_metrics(inds, mappings, captions_per_image):
     return (meanR, medR, mean_ap)
 
 
-def encode_data(model, data_loader, tokenizer):
+def encode_data(model, data_loader, tokenizer, label_embeddings: Tensor, device=device):
     """Encode all images and captions loadable by `data_loader`"""
     # switch to evaluate mode
     model.eval()
@@ -117,7 +117,14 @@ def encode_data(model, data_loader, tokenizer):
         for batch_id, batch in enumerate(tqdm(data_loader)):
             image, text = batch
             image = image.to(device)
-            captions = text.to(device)
+            captions = tokenizer(
+                text,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=77,
+            ).to(device)
+            
             batch_size = image["pixel_values"].shape[0]
             captions_per_image = 5
 
@@ -134,8 +141,17 @@ def encode_data(model, data_loader, tokenizer):
 
             captions = torch.flatten(captions, start_dim=0, end_dim=1)
 
-            img_embs.append(model.encode_image(image))
-            cap_embs.append(model.encode_text(captions))
+            img_emb, txt_emb = model.encode_img_txt(image, captions)
+            
+            # Convert PyTorch tensors to NumPy arrays
+            img_emb_np = img_emb.cpu().numpy()
+            txt_emb_np = txt_emb.cpu().numpy()
+
+            best_cosine_sim = np.full(batch_size, -1.0)  # Initialize with -1
+            best_comb_emb = np.zeros((batch_size, label_embeddings.size(1)))
+            
+            img_embs.append(img_emb)
+            cap_embs.append(txt_emb)
 
     image_embeddings = torch.cat(img_embs, axis=0)
     text_embeddings = torch.cat(cap_embs, axis=0)
@@ -148,18 +164,14 @@ def encode_data(model, data_loader, tokenizer):
     return image_embeddings, text_embeddings, text_to_image_map, image_to_text_map
 
 
-def evalrank(model, data_loader, tokenizer):
-    # Extract Embeddings
-    image_embeddings, text_embeddings, text_to_image_map, image_to_text_map = (
-        encode_data(model, data_loader, tokenizer)
-    )
+def evalrank(image_embeddings, text_embeddings, text_to_image_map, image_to_text_map, kwd: str = ""):
     print(image_embeddings.shape, text_embeddings.shape)
     print(text_to_image_map.shape, image_to_text_map.shape)
 
     num_text = text_embeddings.shape[0]
     num_im = image_embeddings.shape[0]
     captions_per_image = image_to_text_map.shape[1]
-    k_vals = [1, 5, 10, 50, 100]
+    k_vals = [1, 5, 10]
     print(
         f"Number of images: {num_im}, Number of texts: {num_text}, Captions per image: {captions_per_image}"
     )
@@ -226,17 +238,21 @@ def evalrank(model, data_loader, tokenizer):
 
     print("Done.")
     metrics = {
-        "image_to_text_recall": image_to_text_recall,
-        "meanR_i2t": meanR_i2t,
-        "medR_i2t": medR_i2t,
-        "mAP_i2t": mAP_i2t,
-        "text_to_image_recall": text_to_image_recall,
-        "meanR_t2i": meanR_t2i,
-        "medR_t2i": medR_t2i,
-        "mAP_t2i": mAP_t2i,
-        "text_to_image_rsum": sum(text_to_image_recall),
-        "image_to_text_rsum": sum(image_to_text_recall),
-        "r_sum": sum(text_to_image_recall) + sum(image_to_text_recall),
+        f"{kwd}/image_to_text_recall_1": image_to_text_recall[0],
+        f"{kwd}/image_to_text_recall_5": image_to_text_recall[1],
+        f"{kwd}/image_to_text_recall_10": image_to_text_recall[2],
+        f"{kwd}/meanR_i2t": meanR_i2t,
+        f"{kwd}/medR_i2t": medR_i2t,
+        f"{kwd}/mAP_i2t": mAP_i2t,
+        f"{kwd}/text_to_image_recall_1": text_to_image_recall[0],
+        f"{kwd}/text_to_image_recall_5": text_to_image_recall[1],
+        f"{kwd}/text_to_image_recall_10": text_to_image_recall[2],
+        f"{kwd}/meanR_t2i": meanR_t2i,
+        f"{kwd}/medR_t2i": medR_t2i,
+        f"{kwd}/mAP_t2i": mAP_t2i,
+        f"{kwd}/text_to_image_rsum": sum(text_to_image_recall),
+        f"{kwd}/image_to_text_rsum": sum(image_to_text_recall),
+        f"{kwd}/r_sum": sum(text_to_image_recall) + sum(image_to_text_recall),
     }
 
     for key, value in metrics.items():

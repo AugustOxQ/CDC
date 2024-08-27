@@ -18,6 +18,25 @@ def norm_features(image_features, text_features):
     return image_features, text_features
 
 
+class ContrastiveLoss(nn.Module):
+    def __init__(self, margin: float = 1.0) -> None:
+        super().__init__()
+        print("Using ContrastiveLoss")
+        self.margin = margin
+
+    def forward(
+        self,
+        image_features: Tensor,
+        text_features: Tensor,
+        label: Tensor,
+        device: torch.device = device,
+    ):
+        distances = F.pairwise_distance(image_features, text_features)
+        loss = 0.5 * ((1 - label) * distances.pow(2) + 
+                      label * F.relu(self.margin - distances).pow(2))
+        return loss.mean()
+
+
 class CosineLoss(nn.Module):
     def __init__(self, margin: float = 0.1) -> None:
         super().__init__()
@@ -37,10 +56,6 @@ class CosineLoss(nn.Module):
 
         return output
 
-
-# TODO: Implement a classifier that choose labels during training, for example, to do concatenation of image, text and label embeddings.
-
-
 class MeanSquareLoss(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -57,6 +72,8 @@ class MeanSquareLoss(nn.Module):
         output = self.loss(image_features, text_features)
         return output
 
+
+# TODO: Implement a classifier that choose labels during training, for example, to do concatenation of image, text and label embeddings.
 
 def main():
     cosineloss = CosineLoss()

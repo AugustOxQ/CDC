@@ -1,12 +1,16 @@
 import json
 import os
+from turtle import update
 import warnings
 from datetime import datetime
+from altair import sample
 import numpy as np
+from sklearn import metrics
 from sklearn.metrics.pairwise import cosine_similarity
 import random
 
 import hydra
+from sqlalchemy import all_
 import wandb
 
 import torch
@@ -63,8 +67,8 @@ def compute_recall_at_k(similarities, k):
 def extract_and_store_features(annotation_path, image_path, feature_manager, batch_size, model, preprocess, tokenizer, device, ratio=0.1):
 
     dataset = FeatureExtractionDataset(annotation_path, image_path, preprocess, ratio=ratio)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=8)
+    sample_ids_list = []
     model.eval()
     with torch.no_grad():
         for batch_id, batch in enumerate(tqdm(dataloader)):
@@ -83,12 +87,15 @@ def extract_and_store_features(annotation_path, image_path, feature_manager, bat
                 img_emb, txt_emb = model.encode_img_txt(image_input, text_input)
                 img_emb, txt_emb = img_emb.cpu().numpy(), txt_emb.cpu().numpy()
 
-            for i, idx in enumerate(sample_ids):
-                feature_manager.add_features(int(idx), img_emb[i], txt_emb[i])
+            feature_manager.add_features_chunk(batch_id, img_emb, txt_emb, sample_ids)
+            
+            sample_ids_list.extend(sample_ids)
+            
+        return sample_ids_list
                 
     # feature_manager.debug_print()
     
-def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], max_batches=5):
+def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], max_batches=10):
     # Read embeddings directly from the dataloader, compare with other mebeddings from the same batch
     model.eval()
     total_raw_better_count = 0
@@ -105,13 +112,13 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
                 break
             
             img_emb, txt_emb, label_embedding, sample_id = batch
+            img_emb, txt_emb, label_embedding = img_emb.squeeze(0), txt_emb.squeeze(0), label_embedding.squeeze(0)
             
             img_emb = img_emb.to(device)
             txt_emb = txt_emb.to(device)
             label_embedding = label_embedding.to(device)
             
             # Shuffle label embeddings
-            # label_embedding_shuffled = label_embedding[torch.randperm(label_embedding.size(0))]
             label_embedding_shuffled = random_sample_with_replacement(label_embedding)
             
             # Combine embeddings
@@ -180,7 +187,7 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
 
 
 def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch, Ks=[1, 5, 10]):
-    # Load unique label embeddings
+    # Load unique label embeddings up to 50
     label_embeddings = label_embeddings[:50]
     
     total_samples = 0
@@ -190,14 +197,32 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
     all_img_emb = []
     all_txt_emb = []
     all_best_comb_emb = []
+    
+    #  (as there are multiple pieces of text for each image)
+    image_to_text_map = []
 
+    # text_to_image_map[i] gives the corresponding image index for the ith text
+    text_to_image_map = []
+
+    text_index = 0
+    image_index = 0
+    
     model.eval()
     with torch.no_grad():
         for batch_id, batch in enumerate(tqdm(dataloader)):
             image, raw_text = batch
             image_input = image.to(device)
             batch_size = image_input["pixel_values"].size(0)
-                    
+            raw_text_list = []
+            batch_size, captions_per_image = image["pixel_values"].shape[0], 5
+            
+            # Flatten raw_text
+            for b in range(batch_size):
+                for i in range(captions_per_image):
+                    raw_text_list.append(raw_text[i][b])
+            raw_text = raw_text_list
+            
+            # Tokenize raw_text
             text_input = tokenizer(
                 raw_text,
                 return_tensors="pt",
@@ -205,6 +230,19 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
                 truncation=True,
                 max_length=77,
             ).to(device)
+            
+            # Update text_to_image_map and image_to_text_map for this batch
+            for batch_id in range(batch_size):
+                # the next image corresponds to text captions [text_index ... text_index + captions_per_image - 1]
+                text_indices = list(range(text_index, text_index + captions_per_image))
+                image_to_text_map.append(text_indices)
+                text_index += captions_per_image
+
+                # Each of the next captions_per_image text captions correspond to the same image
+                text_to_image_map += [image_index] * captions_per_image
+                image_index += 1
+            
+            # text_input = torch.flatten(text_input, start_dim=0, end_dim=1)
 
             img_emb, txt_emb = model.encode_img_txt(image_input, text_input)
             
@@ -212,8 +250,8 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
             img_emb_np = img_emb.cpu().numpy()
             txt_emb_np = txt_emb.cpu().numpy()
 
-            best_cosine_sim = np.full(batch_size, -1.0)  # Initialize with -1
-            best_comb_emb = np.zeros((batch_size, label_embeddings.size(1)))
+            best_cosine_sim = np.ones((batch_size, captions_per_image)) * -1 # Initialize to -1
+            best_comb_emb = torch.zeros((batch_size, captions_per_image, label_embeddings.size(1)))
 
             for label_embedding in label_embeddings:
                 label_embedding = label_embedding.to(device)
@@ -223,15 +261,18 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
                 comb_emb_np = comb_emb.cpu().numpy()
                 cosine_sim_comb = cosine_similarity(img_emb_np, comb_emb_np)
 
-            # Update best cosine similarity and corresponding label embeddings
+                # Update best cosine similarity and corresponding label embeddings
                 for i in range(batch_size):
-                    max_cosine_sim_comb = np.max(cosine_sim_comb[i])
-                    if max_cosine_sim_comb > best_cosine_sim[i]:
-                        best_cosine_sim[i] = max_cosine_sim_comb
-                        best_comb_emb[i] = comb_emb_np[i]
+                    for j in range(5):
+                        current_cosine_sim = cosine_sim_comb[i, i * 5 + j]
+                        if current_cosine_sim > best_cosine_sim[i, j]:
+                            best_cosine_sim[i, j] = current_cosine_sim
+                            best_comb_emb[i, j] = comb_emb.cpu()[i * 5 + j]
+                            
+                    # max_cosine_sim_comb = np.max(cosine_sim_comb[i * 5 + j])
 
             # Compare best cosine similarity with raw cosine similarity
-            cosine_sim_raw = cosine_similarity(img_emb_np, txt_emb_np).diagonal()
+            cosine_sim_raw = np.array([cosine_similarity(img_emb_np[i:i+1], txt_emb_np[i*5:(i+1)*5]).flatten() for i in range(batch_size)])
             
             total_better_count += np.sum(best_cosine_sim > cosine_sim_raw)
             total_samples += batch_size
@@ -241,8 +282,8 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
             total_improvement += np.sum(improvement)
             
             # Accumulate embeddings for recall calculation
-            all_img_emb.append(img_emb_np)
-            all_txt_emb.append(txt_emb_np)
+            all_img_emb.append(img_emb.cpu())
+            all_txt_emb.append(txt_emb.cpu())
             all_best_comb_emb.append(best_comb_emb)
             
             del img_emb, txt_emb, image_input, text_input, comb_emb, label_embedding
@@ -250,10 +291,18 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
             torch.cuda.empty_cache()
             
     # Concatenate all accumulated embeddings
-    all_img_emb = np.concatenate(all_img_emb, axis=0)
-    all_txt_emb = np.concatenate(all_txt_emb, axis=0)
-    all_best_comb_emb = np.concatenate(all_best_comb_emb, axis=0)
-
+    all_img_emb = torch.cat(all_img_emb, axis=0)
+    all_txt_emb = torch.cat(all_txt_emb, axis=0)
+    all_best_comb_emb = torch.cat(all_best_comb_emb, axis=0)
+    
+    text_to_image_map = torch.LongTensor(text_to_image_map).to(device)
+    image_to_text_map = torch.LongTensor(image_to_text_map).to(device)
+    
+    all_img_emb /= torch.norm(all_img_emb, dim=1, keepdim=True)
+    all_txt_emb /= torch.norm(all_txt_emb, dim=1, keepdim=True)
+    all_best_comb_emb /= torch.norm(all_best_comb_emb, dim=1, keepdim=True)
+    all_best_comb_emb = all_best_comb_emb.view(-1, all_best_comb_emb.size(2))
+    
     # Compute cosine similarities globally
     cosine_sim_raw_global = cosine_similarity(all_img_emb, all_txt_emb)
     cosine_sim_comb_global = cosine_similarity(all_img_emb, all_best_comb_emb)
@@ -268,16 +317,26 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
     print(f"Inference Test - Percentage of better cosine similarity: {better_percentage:.2f}%")
     print(f"Inference Test - Average improvement over raw cosine similarity: {avg_improvement:.2f}%")
     
-    for k in [1, 5, 10]:
-        print(f"Inference Test - Recall@{k} for cosine_sim_raw: {recalls_raw[k] * 100:.2f}%")
-        print(f"Inference Test - Recall@{k} for cosine_sim_comb: {recalls_comb[k] * 100:.2f}%")
+    metrics_raw = evalrank(all_img_emb, all_txt_emb, text_to_image_map, image_to_text_map, "raw")
     
-    return {
+    metrics_comb = evalrank(all_img_emb, all_best_comb_emb, text_to_image_map, image_to_text_map, "comb")
+    
+    metrics_basic = {
         "test/better_percentage": better_percentage,
         "test/avg_improvement": avg_improvement,
-        "test/recalls_raw": recalls_raw,
-        "test/recalls_comb": recalls_comb
     }
+    
+    metrics_total = {**metrics_basic, **metrics_raw, **metrics_comb}
+    
+    return metrics_total, all_img_emb, all_txt_emb, all_best_comb_emb
+    
+    # return {
+    #     "test/better_percentage": better_percentage,
+    #     "test/avg_improvement": avg_improvement,
+    #     # "test/recalls_raw": recalls_raw,
+    #     # "test/recalls_comb": recalls_comb
+    # }, all_img_emb, all_txt_emb, all_best_comb_emb
+
 
 def train(cfg: DictConfig, **kwargs):
     model = kwargs["model"]
@@ -289,6 +348,7 @@ def train(cfg: DictConfig, **kwargs):
     scheduler = kwargs["scheduler"]
     embedding_manager = kwargs["embedding_manager"]
     log_interval = cfg.train.log_interval
+    wandb_run = kwargs["wandb_run"]
 
     model.train()
     epoch_metrics = {
@@ -299,10 +359,19 @@ def train(cfg: DictConfig, **kwargs):
     for batch_id, batch in enumerate(tqdm(train_dataloader)):
         
         img_emb, txt_emb, label_embedding, sample_id = batch
+        img_emb, txt_emb, label_embedding = img_emb.squeeze(0), txt_emb.squeeze(0), label_embedding.squeeze(0)
+        
+        # sample_id = [int(s) for s in sample_id]
+
         img_emb, txt_emb = img_emb.to(device), txt_emb.to(device)
     
-        label_embedding = nn.Parameter(label_embedding, requires_grad=True)
-        label_embedding = label_embedding.to(device)
+        label_embedding = label_embedding.to(device).clone().detach().requires_grad_(True)
+        label_embedding_cp = label_embedding.clone().detach()
+        
+        # Initialize optimizer for label_embedding
+        current_lr = optimizer.param_groups[0]['lr']
+        optimizer_label = torch.optim.AdamW([label_embedding], lr=current_lr, weight_decay=cfg.train.weight_decay,
+        betas=(cfg.train.betas[0], cfg.train.betas[1]))
 
         lbl_emb = model.label_encoder(label_embedding)
         comb_emb = model.combine(txt_emb, label_embedding)
@@ -310,12 +379,16 @@ def train(cfg: DictConfig, **kwargs):
         loss = criteria(img_emb, comb_emb)
         epoch_metrics["loss"] += loss.item()
         optimizer.zero_grad()
+        optimizer_label.zero_grad()
         loss.backward()
         optimizer.step()
-
-        # Save updated embeddings
-        for ip, le in zip(sample_id, lbl_emb):
-            embedding_manager.update_embedding(int(ip), le.data)
+        optimizer_label.step()
+        
+        # Check if label_embedding is updated
+        diff = torch.sum(label_embedding - label_embedding_cp)
+        assert diff != 0, "Label embedding is not updated"
+        
+        embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding)
 
         # Log
         scheduler.step(epoch + batch_id / len(train_dataloader))
@@ -325,7 +398,7 @@ def train(cfg: DictConfig, **kwargs):
             )
             
         # Wandb logger
-        wandb.log(
+        wandb_run.log(
             {
                 "train/total_loss": loss.item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
@@ -350,6 +423,7 @@ def run(cfg: DictConfig, **kwargs):
     # Get args
     logger_dir = kwargs["logger_dir"]
 
+    wandb_run = kwargs["wandb_run"]
     model = CDC().to(device)
     preprocess = AutoImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
     tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
@@ -360,30 +434,35 @@ def run(cfg: DictConfig, **kwargs):
     # Initialize feature manager
     feature_manager = FeatureManager(cfg.dataset.extract_path, chunk_size=cfg.train.batch_size)
     
-    if cfg.dataset.pre_extract:
-        print("##########Extracting and storing features##########")
-        extract_and_store_features(cfg.dataset.train_path, cfg.dataset.img_path, feature_manager, cfg.train.batch_size, model, preprocess, tokenizer, device, ratio = cfg.dataset.ratio)
-    else:
-        print("##########Loading pre-extracted features##########")
-        feature_manager.load_features()
-
     # Initialize experiment
     experiment_dir, init_dir, plot_dir = folder_manager.initialize_experiment(cfg.log_tag)
     checkpoint_dir, logs_dir = folder_manager.create_directories(experiment_dir)
+    
+    if cfg.dataset.pre_extract:
+        print("##########Extracting and storing features##########")
+        sample_ids_list = extract_and_store_features(cfg.dataset.train_path, cfg.dataset.img_path, feature_manager, cfg.train.batch_size, model, preprocess, tokenizer, device, ratio = cfg.dataset.ratio)
+        torch.save(sample_ids_list, os.path.join(cfg.dataset.extract_path, "sample_ids_list.pt"))
+    else:
+        print("##########Loading pre-extracted features##########")
+        sample_ids_list = torch.load(os.path.join(cfg.dataset.extract_path, "sample_ids_list.pt"))
+        # turn sample_ids_list into a list of integers
+        feature_manager.load_features()
+        
+    sample_ids_list = [int(sample_id) for sample_id in sample_ids_list]
 
     # Initialize embedding manager
     print("##########Initializing Embedding Manager##########")
     annotations = json.load(open(cfg.dataset.train_path))
     annotations = annotations[: int(len(annotations) * cfg.dataset.ratio)]
     embedding_manager = EmbeddingManager(
-        annotations, embedding_dim=512, chunk_size=10000, hdf5_dir=init_dir
+        annotations, embedding_dim=512, chunk_size=cfg.train.batch_size, hdf5_dir=init_dir, sample_ids_list=sample_ids_list
     )
 
     # Samples to track
     samples_to_track = [0, 1, 2, 3, 4]  # Indices of the samples to track
 
     # Initialize clustering
-    clustering = Clustering(embedding_manager)
+    clustering = Clustering()
 
     # Create Train and Test dataloader
     train_dataset = CDC_train(
@@ -394,12 +473,13 @@ def run(cfg: DictConfig, **kwargs):
         ratio=cfg.dataset.ratio,
     )
     
+    # batch_size = 1 and no shuffle, just load chunk embeddings
     train_dataloader = DataLoader(
         train_dataset,
-        batch_size=cfg.train.batch_size,
-        shuffle=True,
-        # TODO: Fix num_workers, it is causing error. Which is a multithreading issue
-        # num_workers=cfg.train.num_workers,
+        # batch_size=cfg.train.batch_size,
+        batch_size=1,
+        shuffle=False,
+        num_workers=cfg.train.num_workers,
     )
     
     test_dataset = CDC_test(
@@ -413,7 +493,7 @@ def run(cfg: DictConfig, **kwargs):
         test_dataset,
         batch_size=cfg.eval.batch_size,
         shuffle=False,
-        # num_workers=cfg.train.num_workers,
+        num_workers=cfg.train.num_workers,
     )
 
     # Setup criteria and optimizer and scheduler
@@ -432,7 +512,7 @@ def run(cfg: DictConfig, **kwargs):
     logger = []
     max_epoch = cfg.train.max_epochs
     
-    initial_n_clusters = len(train_dataset) - cfg.train_2.initial_n_clusters
+    initial_n_clusters = train_dataset.get_len() - cfg.train_2.initial_n_clusters
     first_stage_n = cfg.train_2.first_stage_n
     second_stage_n = cfg.train_2.second_stage_n
     k_means_start_epoch = cfg.train_2.k_means_start_epoch
@@ -446,10 +526,19 @@ def run(cfg: DictConfig, **kwargs):
     for epoch in range(max_epoch):
         logger_epoch = {}
         logger_epoch["epoch"] = epoch
-
+        
+        unique_embeddings = None
+        
         # Train
         if cfg.control.train: # Network training
             print(f"##########Epoch {epoch}: Training##########")
+            
+            # Create new directory for the current epoch
+            new_hdf5_dir = folder_manager.create_epoch_folder(epoch)
+            embedding_manager.hdf5_dir = new_hdf5_dir
+            embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
+            embedding_manager.load_embeddings()
+            
             train_epoch_log = train(
                 cfg,
                 model=model,
@@ -460,60 +549,42 @@ def run(cfg: DictConfig, **kwargs):
                 optimizer=optimizer,
                 embedding_manager=embedding_manager,
                 scheduler=scheduler,
+                wandb_run=wandb_run,
             )
             scheduler.step()
             logger_epoch["train"] = train_epoch_log
             
             # Save epoch metrics
             folder_manager.save_metrics(train_epoch_log, logs_dir, epoch)
-
-            # Create new directory for the current epoch
-            new_hdf5_dir = folder_manager.create_epoch_folder(epoch)
-            embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
-
-            # Update the embedding manager's hdf5_dir to the new directory
-            embedding_manager.hdf5_dir = new_hdf5_dir
     
         if cfg.control.train_2: # KMeans update
             n_clusters = calculate_n_clusters(initial_n_clusters, first_stage_n, second_stage_n, epoch, k_means_start_epoch, k_means_slow_epoch)
-            wandb.log({"train/n_clusters": n_clusters})
+            wandb_run.log({"train/n_clusters": n_clusters})
             
             if n_clusters == 0:
                 print("##########No clustering performed##########")
                 
             else:
                 # Only perform clustering if n_clusters is not 0
-                print(f"##########Epoch {epoch}: Number of clusters: {n_clusters}##########")
+                print(f"##########Epoch {epoch}: Number of clusters to be cluster: {n_clusters}##########")
             
                 # Create new directory for the current epoch
                 new_hdf5_dir = folder_manager.create_epoch_folder(f"{epoch}_kmupdate")
-                embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
-
-                # Update the embedding manager's hdf5_dir to the new directory
                 embedding_manager.hdf5_dir = new_hdf5_dir
+                embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
+                embedding_manager.load_embeddings()
 
                 # Perform clustering and merge embeddings using proxy embeddings
-                label_embedding = torch.stack(
-                    [
-                        embedding_manager.get_proxy_embedding(sample_id)
-                        for sample_id in range(len(train_dataset))
-                    ]
-                )
-
-                # Identify unique embeddings and their original indices
-                unique_embeddings, inverse_indices = torch.unique(
-                    label_embedding, return_inverse=True, dim=0
-                )
+                label_embedding = embedding_manager.get_all_embeddings()[1]
 
                 # Perform UMAP and clustering on unique embeddings
                 print("##########Performing UMAP##########")
-                umap_features = clustering.get_umap(unique_embeddings)
+                umap_features = clustering.get_umap(label_embedding)
                 
                 print("##########Performing KMeans##########")
                 umap_labels, centers = clustering.get_kmeans(
                 umap_features, n_clusters=n_clusters
                 )
-
                 umap_features_np = umap_features.cpu().numpy()
                 umap_labels_np = umap_labels.cpu().numpy()
 
@@ -522,20 +593,42 @@ def run(cfg: DictConfig, **kwargs):
                     umap_features_np, umap_labels_np, plot_dir, epoch, samples_to_track
                 )
                 print("##########Performing clustering update##########")
+                
                 # Map clustering results back to the original embeddings
-                mapped_labels = umap_labels[inverse_indices]
-                clustering.merge_embeddings(
-                    mapped_labels,
-                    centers,
-                    label_embedding,
+                updated_embeddings = clustering.kmeans_update(
+                    umap_labels=umap_labels,
+                    centers = centers,
+                    original_embeddings=label_embedding,
+                    update_type='hard',
+                    alpha=0.1
                 )
                 
-                updated_embeddings = torch.stack(
-                    [
-                        embedding_manager.get_embedding(sample_id)
-                            for sample_id in range(len(train_dataset))
-                    ]
+                # Find unique embeddings
+                unique_embeddings, _ = torch.unique(
+                    updated_embeddings, return_inverse=True, dim=0
                 )
+                print(f"Unique embeddings after clustering update: {unique_embeddings.size(0)}")
+                
+                if unique_embeddings.size(0) <= cfg.eval.max_clusters:
+                    torch.save(unique_embeddings, os.path.join(experiment_dir, f"unique_embeddings_{epoch}.pt"))
+                
+                # Check if embeddings have been updated
+                differences = torch.any(label_embedding != updated_embeddings, dim=1)
+                num_different_rows = torch.sum(differences).item()
+                print(num_different_rows)
+                
+                # update the embeddings
+                embedding_manager.update_all_chunks(updated_embeddings)
+                embedding_manager.load_embeddings()
+                
+                
+                #TODO: Double check this
+                # updated_embeddings = embedding_manager.get_all_embeddings()[1]
+                
+                # # Check if embeddings have been updated
+                # differences = torch.any(updated_embeddings != label_embedding, dim=1)
+                # num_different_rows = torch.sum(differences).item()
+                # print(f"Number of different rows after update: {num_different_rows}")
                 
                 # Calculate the updated UMAP and KMeans clustering
                 umap_features_updated = clustering.get_umap(updated_embeddings)
@@ -554,32 +647,27 @@ def run(cfg: DictConfig, **kwargs):
                     f"{epoch}_kmupdate",
                     samples_to_track,
                 )
-                
             
         if cfg.control.val:
             print("##########Testing train dataset##########")
             inf_train_log = inference_train(model, tokenizer, train_dataloader, device, epoch, [1, 5, 10])
-            wandb.log(inf_train_log)
+            wandb_run.log(inf_train_log)
             logger_epoch["inference_train"] = inf_train_log
             
-        if cfg.control.test:            
-            # Determine the number of clusters
-            label_embedding = torch.stack(
-                    [
-                        embedding_manager.get_proxy_embedding(sample_id)
-                        for sample_id in range(len(train_dataset))
-                    ]
-                )
-            # Identify unique embeddings
-            unique_embeddings, _ = torch.unique(
-                label_embedding, return_inverse=True, dim=0
-            )
-            print(f"Unique embeddings: {unique_embeddings.size(0)}")
-            if unique_embeddings.size(0) <= cfg.eval.max_clusters:
+        if cfg.control.test:      
+            if unique_embeddings is not None:      
+                # if unique_embeddings.size(0) <= cfg.eval.max_clusters:
                 print("##########Testing test dataset##########")
-                inf_test_log = inference_test(model, tokenizer, test_dataloader, unique_embeddings, device, epoch, [1, 5, 10])
+                print(f"Unique embeddings: {unique_embeddings.size(0)}")
+                inf_test_log, all_img_emb, all_txt_emb, all_best_comb_emb = inference_test(model, tokenizer, test_dataloader, unique_embeddings, device, epoch, [1, 5, 10])
                 logger_epoch["inference_test"] = inf_test_log
-                wandb.log(inf_test_log)
+                wandb_run.log(inf_test_log)
+                
+                # Save embeddings for visualization
+                if cfg.control.save:
+                    torch.save(all_img_emb, os.path.join(experiment_dir, "vis",f"all_img_emb_{epoch}.pt"))
+                    torch.save(all_txt_emb, os.path.join(experiment_dir, "vis", f"all_txt_emb_{epoch}.pt"))
+                    torch.save(all_best_comb_emb, os.path.join(experiment_dir, "vis", f"all_best_comb_emb_{epoch}.pt"))
 
             
         # Save model, epoch, optimizer, scheduler
@@ -593,7 +681,7 @@ def run(cfg: DictConfig, **kwargs):
     # Save final model and merge history
     folder_manager.save_final_model(model, experiment_dir)
     # folder_manager.save_merge_history(embedding_manager.merge_history, experiment_dir)
-    feature_manager.close()
+    # feature_manager.close()
     
     # Clean cuda cache
     del (
@@ -609,7 +697,7 @@ def run(cfg: DictConfig, **kwargs):
     return logger
 
 
-@hydra.main(config_path="configs", config_name="coco", version_base=None)
+@hydra.main(config_path="configs", config_name="flickr30k", version_base=None)
 def main(cfg):
     seed = cfg.seed
     np.random.seed(seed)
@@ -630,8 +718,10 @@ def main(cfg):
     logger_dir = f"logs/{now}_{cfg.log_tag}"
     os.mkdir(logger_dir)
     OmegaConf.save(config=cfg, f=os.path.join(logger_dir, "config.yaml"))
-    wandb.init(project=project, entity=entity, tags=tags)
-    logger = run(cfg=cfg, logger_dir=logger_dir)
+    
+    wandb.require("core")
+    wandb_run = wandb.init(project=project, entity=entity, tags=tags)
+    logger = run(cfg=cfg, logger_dir=logger_dir, wandb_run=wandb_run)
     json.dump(logger, open(os.path.join(logger_dir, "logger.json"), "w"))
     
     wandb.finish()

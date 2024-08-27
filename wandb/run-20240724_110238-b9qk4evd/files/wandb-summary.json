@@ -1,0 +1,1 @@
+{"train/total_loss":0.7145043015480042,"_runtime":485.882006049,"train/n_clusters":50,"val/shuffled_better_percentage":49.90234375,"val/raw_better_percentage":84.7265625,"train/lr":2.5377603764117674e-07,"_wandb":{"runtime":496},"_timestamp":1.7218122448370538e+09,"_step":339}

@@ -118,6 +118,31 @@ class FeatureExtractionDataset__(Dataset):
         sample_id = self.sample_ids[idx]
         return image_input, raw_text, sample_id
 
+# class CDC_train_preextract(Dataset):
+#     def __init__(self, annotation_path, image_path, embedding_manager, feature_manager, ratio=0.1):
+#         self.annotations = json.load(open(annotation_path))
+#         self.annotations = self.annotations[:int(len(self.annotations) * ratio)]
+#         self.image_path = image_path
+#         self.embedding_manager = embedding_manager
+#         self.feature_manager = feature_manager
+
+#     def __len__(self):
+#         return len(self.annotations)
+
+#     def __getitem__(self, idx):
+#         annotation = self.annotations[idx]
+        
+#         sample_id = idx
+#         img_emb, txt_emb = self.feature_manager.get_feature(sample_id)
+#         img_emb = torch.tensor(img_emb, dtype=torch.float32)
+#         txt_emb = torch.tensor(txt_emb, dtype=torch.float32)
+        
+#         embedding = self.embedding_manager.get_embedding(sample_id)
+#         label_embedding = torch.tensor(embedding, dtype=torch.float32)
+
+#         return img_emb, txt_emb, label_embedding, sample_id
+
+
 class CDC_train_preextract(Dataset):
     def __init__(self, annotation_path, image_path, embedding_manager, feature_manager, ratio=0.1):
         self.annotations = json.load(open(annotation_path))
@@ -125,19 +150,40 @@ class CDC_train_preextract(Dataset):
         self.image_path = image_path
         self.embedding_manager = embedding_manager
         self.feature_manager = feature_manager
+        self.chunk_size = feature_manager.chunk_size
+        self.chunk_files = list(set([self.feature_manager._get_chunk_file_and_idx(idx)[0] for idx in range(len(self.annotations))]))
+        self.chunk_data = {}
+        self.current_chunk = None
 
     def __len__(self):
+        return len(self.chunk_files)
+    
+    def get_len(self):
         return len(self.annotations)
 
     def __getitem__(self, idx):
-        annotation = self.annotations[idx]
+        chunk_id = idx
+        if self.current_chunk != chunk_id:
+            self.current_chunk = chunk_id
+            self.chunk_data = self.feature_manager.get_chunk(chunk_id)
         
-        sample_id = idx
-        img_emb, txt_emb = self.feature_manager.get_feature(sample_id)
+        img_emb = self.chunk_data['img_features'][:]
+        txt_emb = self.chunk_data['txt_features'][:]
+        sample_id = self.chunk_data['sample_ids'][:]
+        
         img_emb = torch.tensor(img_emb, dtype=torch.float32)
         txt_emb = torch.tensor(txt_emb, dtype=torch.float32)
         
-        embedding = self.embedding_manager.get_embedding(sample_id)
+        sample_id_2, embedding = self.embedding_manager.get_chunk_embeddings(chunk_id)
+        
+        # Turn sample_id into a list of integers
+        sample_id = [int(i) for i in sample_id]
+        sample_id_2 = [int(i) for i in sample_id_2]
+        
+        assert len(sample_id) == len(sample_id_2), f"Sample ID length mismatch: expected {len(sample_id)}, got {len(sample_id_2)}"
+        
+        assert sample_id[:10] == sample_id_2[:10], f"Sample ID mismatch: expected {sample_id[:10]}, got {sample_id_2[:10]}"
+        
         label_embedding = torch.tensor(embedding, dtype=torch.float32)
 
         return img_emb, txt_emb, label_embedding, sample_id
@@ -166,7 +212,7 @@ class CDC_test(Dataset):
         raw_text = (
             self.annotations[idx]["caption"]
             if type(self.annotations[idx]["caption"]) == str
-            else self.annotations[idx]["caption"][0]
+            else self.annotations[idx]["caption"][:5]
         )
 
         return image_input, raw_text
