@@ -28,9 +28,11 @@ class ContrastiveLoss(nn.Module):
         self,
         image_features: Tensor,
         text_features: Tensor,
-        label: Tensor,
         device: torch.device = device,
     ):
+        labels_matrix = torch.eye(image_features.size(0)).to(device)
+        label = 1 - labels_matrix
+        
         distances = F.pairwise_distance(image_features, text_features)
         loss = 0.5 * ((1 - label) * distances.pow(2) + 
                       label * F.relu(self.margin - distances).pow(2))

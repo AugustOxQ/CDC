@@ -28,7 +28,7 @@ from transformers import AutoTokenizer, AutoImageProcessor
 # Import local packages
 from src.data.cdc_datamodule import CDC_test, FeatureExtractionDataset
 from src.data.cdc_datamodule import CDC_train_preextract as CDC_train
-from src.metric.loss import CosineLoss, MeanSquareLoss
+from src.metric.loss import CosineLoss, MeanSquareLoss, ContrastiveLoss
 from src.models.cdc import CDC
 from src.models.components.clustering import Clustering
 from src.utils import EmbeddingManager, FolderManager, evalrank, calculate_n_clusters, plot_umap, FeatureManager
@@ -665,9 +665,9 @@ def run(cfg: DictConfig, **kwargs):
                 
                 # Save embeddings for visualization
                 if cfg.control.save:
-                    torch.save(all_img_emb, os.path.join(experiment_dir, "vis",f"all_img_emb_{epoch}.pt"))
-                    torch.save(all_txt_emb, os.path.join(experiment_dir, "vis", f"all_txt_emb_{epoch}.pt"))
-                    torch.save(all_best_comb_emb, os.path.join(experiment_dir, "vis", f"all_best_comb_emb_{epoch}.pt"))
+                    torch.save(all_img_emb, os.path.join(experiment_dir,f"all_img_emb_{epoch}.pt"))
+                    torch.save(all_txt_emb, os.path.join(experiment_dir, f"all_txt_emb_{epoch}.pt"))
+                    torch.save(all_best_comb_emb, os.path.join(experiment_dir, f"all_best_comb_emb_{epoch}.pt"))
 
             
         # Save model, epoch, optimizer, scheduler
