@@ -5,6 +5,7 @@ import warnings
 from datetime import datetime
 from altair import sample
 import numpy as np
+from pyparsing import WordStart
 from sklearn import metrics
 from sklearn.metrics.pairwise import cosine_similarity
 import random
@@ -20,6 +21,7 @@ import transformers
 from omegaconf import DictConfig, OmegaConf
 from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
+    CosineAnnealingWarmRestarts
 )
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
@@ -100,6 +102,7 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
     model.eval()
     total_raw_better_count = 0
     total_shuffled_better_count = 0
+    total_diversity = 0.0
     total_samples = 0
     # total_precisions = {k: 0.0 for k in Ks}
 
@@ -157,31 +160,36 @@ def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], 
             comparison_shuffled = cosine_sim_comb > cosine_sim_comb_shuffled
             shuffled_better_count = np.sum(comparison_shuffled)
             total_shuffled_better_count += shuffled_better_count
-
-            # # Test 3: Precision and Recall@K of cosine_sim_comb
+            
+            # Test 3: Diversity of label embeddings
+            normalized_embeddings = F.normalize(label_embedding, p=2, dim=1)
+            similarity_matrix = torch.mm(normalized_embeddings, normalized_embeddings.t())
+            mask = torch.triu(torch.ones_like(similarity_matrix), diagonal=1).bool()
+            pairwise_similarities = similarity_matrix[mask]
+            total_diversity += 1 - torch.mean(pairwise_similarities).item()
+            
+            # Sample size
             batch_size = cosine_sim_comb.shape[0]
             total_samples += batch_size
                         
             del img_emb, txt_emb, label_embedding, comb_emb, comb_emb_shuffled, label_embedding_shuffled
             
             torch.cuda.empty_cache()
-            
-    # # Compute precision@K
-    # for k in Ks:
-    #     total_precisions[k] /= (total_samples * k)
+
     
     # Calculate percentage of better label embeddings
     raw_better_percentage = total_raw_better_count / total_samples * 100
     shuffled_better_percentage = total_shuffled_better_count / total_samples * 100
+    diversity_score = total_diversity / total_samples * 100
     
     print(f"Epoch {epoch}: Combined embeddings better than raw embeddings: {raw_better_percentage:.2f}%")
     print(f"Epoch {epoch}: Combined embeddings better than shuffled embeddings: {shuffled_better_percentage:.2f}%")
-    # for k in Ks:
-    #     print(f'Epoch {epoch}: Precision@{k}: {total_precisions[k] * 100:.2f}%')
+    print(f"Epoch {epoch}: Diversity score: {diversity_score:.2f}")
 
     return {
         "val/raw_better_percentage": raw_better_percentage,
         "val/shuffled_better_percentage": shuffled_better_percentage,
+        "val/diversity_score": diversity_score,
         # "precisions": total_precisions
     }
 
@@ -193,6 +201,7 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
     total_samples = 0
     total_better_count = 0
     total_improvement = 0.0
+    total_worst_improvement = 0.0
     
     all_img_emb = []
     all_txt_emb = []
@@ -251,6 +260,7 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
             txt_emb_np = txt_emb.cpu().numpy()
 
             best_cosine_sim = np.ones((batch_size, captions_per_image)) * -1 # Initialize to -1
+            wost_cosine_sim = np.ones((batch_size, captions_per_image)) * 1 # Initialize to 1
             best_comb_emb = torch.zeros((batch_size, captions_per_image, label_embeddings.size(1)))
 
             for label_embedding in label_embeddings:
@@ -268,6 +278,8 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
                         if current_cosine_sim > best_cosine_sim[i, j]:
                             best_cosine_sim[i, j] = current_cosine_sim
                             best_comb_emb[i, j] = comb_emb.cpu()[i * 5 + j]
+                        if current_cosine_sim < wost_cosine_sim[i, j]:
+                            wost_cosine_sim[i, j] = current_cosine_sim
                             
                     # max_cosine_sim_comb = np.max(cosine_sim_comb[i * 5 + j])
 
@@ -280,6 +292,10 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
             # Calculate improvement
             improvement = (best_cosine_sim - cosine_sim_raw) / cosine_sim_raw
             total_improvement += np.sum(improvement)
+            
+            # Calculate worst improvement
+            worst_improvement = (best_cosine_sim - wost_cosine_sim) / cosine_sim_raw
+            total_worst_improvement += np.sum(worst_improvement)
             
             # Accumulate embeddings for recall calculation
             all_img_emb.append(img_emb.cpu())
@@ -314,8 +330,10 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
     # Compute and print aggregated results
     better_percentage = total_better_count / total_samples * 100
     avg_improvement = total_improvement / total_samples * 100
+    avg_worst_improvement = total_worst_improvement / total_samples * 100
     print(f"Inference Test - Percentage of better cosine similarity: {better_percentage:.2f}%")
     print(f"Inference Test - Average improvement over raw cosine similarity: {avg_improvement:.2f}%")
+    print(f"Inference Test - Average worst improvement over raw cosine similarity: {avg_worst_improvement:.2f}%")
     
     metrics_raw = evalrank(all_img_emb, all_txt_emb, text_to_image_map, image_to_text_map, "raw")
     
@@ -324,6 +342,7 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
     metrics_basic = {
         "test/better_percentage": better_percentage,
         "test/avg_improvement": avg_improvement,
+        "test/avg_worst_improvement": avg_worst_improvement
     }
     
     metrics_total = {**metrics_basic, **metrics_raw, **metrics_comb}
@@ -347,6 +366,7 @@ def train(cfg: DictConfig, **kwargs):
     epoch = kwargs["epoch"]
     scheduler = kwargs["scheduler"]
     embedding_manager = kwargs["embedding_manager"]
+    update_label_embedding = kwargs["update_label_embedding"]
     log_interval = cfg.train.log_interval
     wandb_run = kwargs["wandb_run"]
 
@@ -379,14 +399,19 @@ def train(cfg: DictConfig, **kwargs):
         loss = criteria(img_emb, comb_emb)
         epoch_metrics["loss"] += loss.item()
         optimizer.zero_grad()
-        optimizer_label.zero_grad()
+        if update_label_embedding:
+            optimizer_label.zero_grad()
         loss.backward()
         optimizer.step()
-        optimizer_label.step()
+        if update_label_embedding:
+            optimizer_label.step()
         
         # Check if label_embedding is updated
         diff = torch.sum(label_embedding - label_embedding_cp)
-        assert diff != 0, "Label embedding is not updated"
+        if update_label_embedding:
+            assert diff != 0, "Label embedding should be updated after backward pass"
+        else:
+            assert diff == 0, "Label embedding should not be updated after backward pass"
         
         embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding)
 
@@ -504,8 +529,11 @@ def run(cfg: DictConfig, **kwargs):
         weight_decay=cfg.train.weight_decay,
         betas=(cfg.train.betas[0], cfg.train.betas[1]),
     )
-    scheduler = CosineAnnealingLR(
-        optimizer, T_max=cfg.train.T_max, eta_min=cfg.train.lr_min
+    # scheduler = CosineAnnealingLR(
+    #     optimizer, T_max=cfg.train.T_max, eta_min=cfg.train.lr_min
+    # )
+    scheduler = CosineAnnealingWarmRestarts(
+        optimizer, T_0=cfg.train_2.k_means_slow_epoch, T_mult=1, eta_min=cfg.train.lr_min
     )
 
     # Callbacks
@@ -517,16 +545,16 @@ def run(cfg: DictConfig, **kwargs):
     second_stage_n = cfg.train_2.second_stage_n
     k_means_start_epoch = cfg.train_2.k_means_start_epoch
     k_means_slow_epoch = cfg.train_2.k_means_slow_epoch
+    update_label_embedding = True # Update label embeddings during training
     
     assert k_means_start_epoch < k_means_slow_epoch < max_epoch, "Invalid epoch values for k-means clustering"
     
-    assert initial_n_clusters > first_stage_n > second_stage_n, "Invalid number of clusters"
+    assert initial_n_clusters > first_stage_n >= second_stage_n, "Invalid number of clusters"
 
     # Start training
     for epoch in range(max_epoch):
         logger_epoch = {}
         logger_epoch["epoch"] = epoch
-        
         unique_embeddings = None
         
         # Train
@@ -539,6 +567,10 @@ def run(cfg: DictConfig, **kwargs):
             embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
             embedding_manager.load_embeddings()
             
+            if epoch == k_means_slow_epoch:
+                update_label_embedding = False
+                print("##########Stopping label embedding updates##########")
+            
             train_epoch_log = train(
                 cfg,
                 model=model,
@@ -548,6 +580,7 @@ def run(cfg: DictConfig, **kwargs):
                 criteria=criteria,
                 optimizer=optimizer,
                 embedding_manager=embedding_manager,
+                update_label_embedding=True,
                 scheduler=scheduler,
                 wandb_run=wandb_run,
             )
@@ -556,6 +589,13 @@ def run(cfg: DictConfig, **kwargs):
             
             # Save epoch metrics
             folder_manager.save_metrics(train_epoch_log, logs_dir, epoch)
+            
+            
+        if cfg.control.val:
+            print("##########Testing train dataset##########")
+            inf_train_log = inference_train(model, tokenizer, train_dataloader, device, epoch, [1, 5, 10])
+            wandb_run.log(inf_train_log)
+            logger_epoch["inference_train"] = inf_train_log
     
         if cfg.control.train_2: # KMeans update
             n_clusters = calculate_n_clusters(initial_n_clusters, first_stage_n, second_stage_n, epoch, k_means_start_epoch, k_means_slow_epoch)
@@ -564,9 +604,9 @@ def run(cfg: DictConfig, **kwargs):
             if n_clusters == 0:
                 print("##########No clustering performed##########")
                 
-            else:
+            elif n_clusters >= first_stage_n + 10:
                 # Only perform clustering if n_clusters is not 0
-                print(f"##########Epoch {epoch}: Number of clusters to be cluster: {n_clusters}##########")
+                print(f"##########Epoch {epoch}: Expected number of clusters: {n_clusters}##########")
             
                 # Create new directory for the current epoch
                 new_hdf5_dir = folder_manager.create_epoch_folder(f"{epoch}_kmupdate")
@@ -582,7 +622,7 @@ def run(cfg: DictConfig, **kwargs):
                 umap_features = clustering.get_umap(label_embedding)
                 
                 print("##########Performing KMeans##########")
-                umap_labels, centers = clustering.get_kmeans(
+                umap_labels, _ = clustering.get_kmeans(
                 umap_features, n_clusters=n_clusters
                 )
                 umap_features_np = umap_features.cpu().numpy()
@@ -597,7 +637,6 @@ def run(cfg: DictConfig, **kwargs):
                 # Map clustering results back to the original embeddings
                 updated_embeddings = clustering.kmeans_update(
                     umap_labels=umap_labels,
-                    centers = centers,
                     original_embeddings=label_embedding,
                     update_type='hard',
                     alpha=0.1
@@ -615,7 +654,7 @@ def run(cfg: DictConfig, **kwargs):
                 # Check if embeddings have been updated
                 differences = torch.any(label_embedding != updated_embeddings, dim=1)
                 num_different_rows = torch.sum(differences).item()
-                print(num_different_rows)
+                print(f"Number of different rows after update: {num_different_rows}")
                 
                 # update the embeddings
                 embedding_manager.update_all_chunks(updated_embeddings)
@@ -632,7 +671,7 @@ def run(cfg: DictConfig, **kwargs):
                 
                 # Calculate the updated UMAP and KMeans clustering
                 umap_features_updated = clustering.get_umap(updated_embeddings)
-                umap_labels_updated, centers_updated = clustering.get_kmeans(
+                umap_labels_updated, _ = clustering.get_kmeans(
                     umap_features_updated, n_clusters=n_clusters
                 )
                 
@@ -647,12 +686,14 @@ def run(cfg: DictConfig, **kwargs):
                     f"{epoch}_kmupdate",
                     samples_to_track,
                 )
-            
-        if cfg.control.val:
-            print("##########Testing train dataset##########")
-            inf_train_log = inference_train(model, tokenizer, train_dataloader, device, epoch, [1, 5, 10])
-            wandb_run.log(inf_train_log)
-            logger_epoch["inference_train"] = inf_train_log
+                
+            else:
+                print("##########Stop clustering##########")
+                label_embedding = embedding_manager.get_all_embeddings()[1]
+                unique_embeddings, _ = torch.unique(
+                    label_embedding, return_inverse=True, dim=0
+                )
+                
             
         if cfg.control.test:      
             if unique_embeddings is not None:      
@@ -663,11 +704,11 @@ def run(cfg: DictConfig, **kwargs):
                 logger_epoch["inference_test"] = inf_test_log
                 wandb_run.log(inf_test_log)
                 
-                # Save embeddings for visualization
-                if cfg.control.save:
-                    torch.save(all_img_emb, os.path.join(experiment_dir,f"all_img_emb_{epoch}.pt"))
-                    torch.save(all_txt_emb, os.path.join(experiment_dir, f"all_txt_emb_{epoch}.pt"))
-                    torch.save(all_best_comb_emb, os.path.join(experiment_dir, f"all_best_comb_emb_{epoch}.pt"))
+                # # Save embeddings for visualization
+                # if cfg.control.save:
+                #     torch.save(all_img_emb, os.path.join(experiment_dir,f"all_img_emb_{epoch}.pt"))
+                #     torch.save(all_txt_emb, os.path.join(experiment_dir, f"all_txt_emb_{epoch}.pt"))
+                #     torch.save(all_best_comb_emb, os.path.join(experiment_dir, f"all_best_comb_emb_{epoch}.pt"))
 
             
         # Save model, epoch, optimizer, scheduler

@@ -94,6 +94,8 @@ class EmbeddingManager:
             self.initialize_embeddings()
 
     def initialize_embeddings(self):
+        mean = 0.0
+        std_dev = 2.0
         # Initialize embeddings and store them in chunks
         for chunk_idx in range(0, len(self.sample_ids_list), self.chunk_size):
             chunk_file = os.path.join(
@@ -104,7 +106,9 @@ class EmbeddingManager:
             for i, sample_id in enumerate(
                 self.sample_ids_list[chunk_idx : chunk_idx + self.chunk_size]
             ):
-                embeddings[sample_id] = torch.randn(self.embedding_dim)
+                # embeddings[sample_id] = torch.randn(self.embedding_dim) # normally distributed random embeddings
+                # embeddings[sample_id] = torch.exp(torch.randn(self.embedding_dim) * std_dev + mean) # exponentially distributed random embeddings
+                embeddings[sample_id] = torch.zeros(self.embedding_dim) # zero embeddings
                 self.index_mapping[sample_id] = (chunk_file, sample_id)
                 self.embedding_references[sample_id] = sample_id
 

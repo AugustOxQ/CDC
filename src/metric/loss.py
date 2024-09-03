@@ -1,3 +1,4 @@
+from email.mime import image
 from typing import Any, Dict, Optional, Tuple
 
 import hydra
@@ -38,6 +39,38 @@ class ContrastiveLoss(nn.Module):
                       label * F.relu(self.margin - distances).pow(2))
         return loss.mean()
 
+
+def cross_entropy(preds, targets, reduction='none') -> torch.Tensor:
+    log_softmax = nn.LogSoftmax(dim=-1)
+    loss = (-targets * log_softmax(preds)).sum(1)
+    if reduction == "none":
+        return loss
+    elif reduction == "mean":
+        return loss.mean()
+    
+
+class ClipLoss(nn.Module):
+    def __init__(self, margin: float = 0.1) -> None:
+        super().__init__()
+        print("Using ClipLoss")
+        self.temprature = torch.ones([])*(1/0.07)
+
+    def forward(
+        self,
+        image_features: Tensor,
+        text_features: Tensor,
+        device: torch.device = device,
+    ):
+        image_features, text_features = norm_features(image_features, text_features)
+        
+        logits = image_features @ text_features.T * self.temprature
+        sim = image_features @ text_features.T
+        targets = F.softmax(sim + sim.t() / 2 * self.temprature, dim=-1)
+        image_loss = cross_entropy(logits, targets, reduction="none")
+        text_loss = cross_entropy(logits.t(), targets.t(), reduction="none")
+        loss = (image_loss + text_loss) / 2.0
+        
+        return loss.mean()
 
 class CosineLoss(nn.Module):
     def __init__(self, margin: float = 0.1) -> None:
