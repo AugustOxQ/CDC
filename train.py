@@ -97,7 +97,7 @@ def extract_and_store_features(annotation_path, image_path, feature_manager, bat
                 
     # feature_manager.debug_print()
     
-def inference_train(model, tokenizer, dataloader, device, epoch, Ks=[1, 5, 10], max_batches=10):
+def inference_train(model, tokenizer, dataloader, device, epoch=0, Ks=[1, 5, 10], max_batches=10):
     # Read embeddings directly from the dataloader, compare with other mebeddings from the same batch
     model.eval()
     total_raw_better_count = 0
@@ -562,10 +562,11 @@ def run(cfg: DictConfig, **kwargs):
             print(f"##########Epoch {epoch}: Training##########")
             
             # Create new directory for the current epoch
-            new_hdf5_dir = folder_manager.create_epoch_folder(epoch)
-            embedding_manager.hdf5_dir = new_hdf5_dir
-            embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
-            embedding_manager.load_embeddings()
+            if cfg.control.save_per_epoch == True:
+                new_hdf5_dir = folder_manager.create_epoch_folder(epoch)
+                embedding_manager.hdf5_dir = new_hdf5_dir
+                embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
+                embedding_manager.load_embeddings()
             
             if epoch == k_means_slow_epoch:
                 update_label_embedding = False
@@ -608,11 +609,12 @@ def run(cfg: DictConfig, **kwargs):
                 # Only perform clustering if n_clusters is not 0
                 print(f"##########Epoch {epoch}: Expected number of clusters: {n_clusters}##########")
             
-                # Create new directory for the current epoch
-                new_hdf5_dir = folder_manager.create_epoch_folder(f"{epoch}_kmupdate")
-                embedding_manager.hdf5_dir = new_hdf5_dir
-                embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
-                embedding_manager.load_embeddings()
+                # # Create new directory for the current epoch
+                if cfg.control.save_per_epoch == True:
+                    new_hdf5_dir = folder_manager.create_epoch_folder(f"{epoch}_kmupdate")
+                    embedding_manager.hdf5_dir = new_hdf5_dir
+                    embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
+                    embedding_manager.load_embeddings()
 
                 # Perform clustering and merge embeddings using proxy embeddings
                 label_embedding = embedding_manager.get_all_embeddings()[1]
@@ -703,12 +705,6 @@ def run(cfg: DictConfig, **kwargs):
                 inf_test_log, all_img_emb, all_txt_emb, all_best_comb_emb = inference_test(model, tokenizer, test_dataloader, unique_embeddings, device, epoch, [1, 5, 10])
                 logger_epoch["inference_test"] = inf_test_log
                 wandb_run.log(inf_test_log)
-                
-                # # Save embeddings for visualization
-                # if cfg.control.save:
-                #     torch.save(all_img_emb, os.path.join(experiment_dir,f"all_img_emb_{epoch}.pt"))
-                #     torch.save(all_txt_emb, os.path.join(experiment_dir, f"all_txt_emb_{epoch}.pt"))
-                #     torch.save(all_best_comb_emb, os.path.join(experiment_dir, f"all_best_comb_emb_{epoch}.pt"))
 
             
         # Save model, epoch, optimizer, scheduler
