@@ -602,10 +602,7 @@ def run(cfg: DictConfig, **kwargs):
             n_clusters = calculate_n_clusters(initial_n_clusters, first_stage_n, second_stage_n, epoch, k_means_start_epoch, k_means_slow_epoch)
             wandb_run.log({"train/n_clusters": n_clusters})
             
-            if n_clusters == 0:
-                print("##########No clustering performed##########")
-                
-            elif n_clusters >= first_stage_n + 10:
+            if n_clusters >= first_stage_n + 10:
                 # Only perform clustering if n_clusters is not 0
                 print(f"##########Epoch {epoch}: Expected number of clusters: {n_clusters}##########")
             
