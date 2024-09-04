@@ -413,7 +413,8 @@ def train(cfg: DictConfig, **kwargs):
         else:
             assert diff == 0, "Label embedding should not be updated after backward pass"
         
-        embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding)
+        if update_label_embedding:
+            embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding)
 
         # Log
         scheduler.step(epoch + batch_id / len(train_dataloader))
@@ -581,7 +582,7 @@ def run(cfg: DictConfig, **kwargs):
                 criteria=criteria,
                 optimizer=optimizer,
                 embedding_manager=embedding_manager,
-                update_label_embedding=True,
+                update_label_embedding=update_label_embedding,
                 scheduler=scheduler,
                 wandb_run=wandb_run,
             )
@@ -647,8 +648,8 @@ def run(cfg: DictConfig, **kwargs):
                 )
                 print(f"Unique embeddings after clustering update: {unique_embeddings.size(0)}")
                 
-                if unique_embeddings.size(0) <= cfg.eval.max_clusters:
-                    torch.save(unique_embeddings, os.path.join(experiment_dir, f"unique_embeddings_{epoch}.pt"))
+                torch.save(unique_embeddings[:50], os.path.join(experiment_dir, f"unique_embeddings.pt"))
+                print(f"Unique embeddings saved to {experiment_dir}")
                 
                 # Check if embeddings have been updated
                 differences = torch.any(label_embedding != updated_embeddings, dim=1)
@@ -692,6 +693,8 @@ def run(cfg: DictConfig, **kwargs):
                 unique_embeddings, _ = torch.unique(
                     label_embedding, return_inverse=True, dim=0
                 )
+                # torch.save(unique_embeddings[:50], os.path.join(experiment_dir, f"unique_embeddings_{epoch}.pt"))
+                # print(f"Unique embeddings saved to {experiment_dir}")
                 
             
         if cfg.control.test:      

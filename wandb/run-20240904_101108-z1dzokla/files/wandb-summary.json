@@ -1,0 +1,1 @@
+{"val/diversity_score":0.08063201661570929,"_timestamp":1.7254375074959264e+09,"_wandb":{"runtime":70},"val/raw_better_percentage":11.103515625,"_runtime":38.75203477,"_step":16,"val/shuffled_better_percentage":99.462890625,"train/n_clusters":0,"train/lr":9.668234230353521e-07,"train/total_loss":0.7763974666595459}

@@ -1,3 +1,4 @@
+from enum import unique
 import json
 import os
 from turtle import update
@@ -210,6 +211,7 @@ def run(cfg: DictConfig, **kwargs):
     model_path = kwargs.get("model_path", "")
     embedding_path = kwargs.get("embedding_path", "")
     experiment_dir = kwargs.get("experiment_dir", "")
+    unique_embeddings_path = kwargs.get("unique_embeddings_path", "")
     
     # Load CDC model
     
@@ -233,7 +235,7 @@ def run(cfg: DictConfig, **kwargs):
     annotations = json.load(open(cfg.dataset.train_path))
     annotations = annotations[: int(len(annotations) * cfg.dataset.ratio)]
     embedding_manager = EmbeddingManager(
-        annotations, embedding_dim=512, chunk_size=cfg.train.batch_size, hdf5_dir=embedding_path, sample_ids_list=sample_ids_list
+        annotations, embedding_dim=512, chunk_size=cfg.train.batch_size, hdf5_dir=embedding_path, sample_ids_list=sample_ids_list, load_existing=True
     )
     
     # Load CDC test dataset
@@ -251,12 +253,14 @@ def run(cfg: DictConfig, **kwargs):
         num_workers=cfg.train.num_workers,
     )
     
-    # Load label embeddings
-    print("Loading label embeddings")
-    label_embedding = embedding_manager.get_all_embeddings()[1]
-    unique_embeddings, _ = torch.unique(
-        label_embedding, return_inverse=True, dim=0
-    )
+    # # Load label embeddings
+    # print("Loading label embeddings")
+    # label_embedding = embedding_manager.get_all_embeddings()[1]
+    # print(f"Label embeddings shape: {label_embedding.size(0)}")
+    # unique_embeddings, _ = torch.unique(
+    #     label_embedding, return_inverse=True, dim=0
+    # )
+    unique_embeddings = torch.load(unique_embeddings_path)
     print(f"Unique embeddings: {unique_embeddings.size(0)}")
     
     print("Starting inference test")
@@ -271,12 +275,12 @@ def main(cfg):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    # Print config
-    print(OmegaConf.to_yaml(cfg))
-    model_path = "res/20240903_233915_flickr30k-preextracted/checkpoints/model_epoch_14.pth"
-    embedding_path = "res/20240903_233915_flickr30k-preextracted/epoch_15_kmupdate"
-    experiment_dir = "res/20240903_233915_flickr30k-preextracted"
-    logger = run(cfg=cfg, model_path = model_path, embedding_path = embedding_path, experiment_dir = experiment_dir)
+    # Set path
+    experiment_dir = "res/20240904_101309_flickr30k-preextracted"
+    model_path = os.path.join(experiment_dir, "final_model.pth")
+    embedding_path = os.path.join(experiment_dir, "init")
+    unique_embeddings_path = os.path.join(experiment_dir, "unique_embeddings_9.pt")
+    logger = run(cfg=cfg, model_path = model_path, embedding_path = embedding_path, experiment_dir = experiment_dir, unique_embeddings_path = unique_embeddings_path)
 
 
 if __name__ == "__main__":
