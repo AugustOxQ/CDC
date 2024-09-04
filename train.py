@@ -561,7 +561,7 @@ def run(cfg: DictConfig, **kwargs):
         if cfg.control.train: # Network training
             print(f"##########Epoch {epoch}: Training##########")
             
-            # Create new directory for the current epoch
+            # # Create new directory for the current epoch
             if cfg.control.save_per_epoch == True:
                 new_hdf5_dir = folder_manager.create_epoch_folder(epoch)
                 embedding_manager.hdf5_dir = new_hdf5_dir
@@ -610,11 +610,11 @@ def run(cfg: DictConfig, **kwargs):
                 print(f"##########Epoch {epoch}: Expected number of clusters: {n_clusters}##########")
             
                 # # Create new directory for the current epoch
-                if cfg.control.save_per_epoch == True:
-                    new_hdf5_dir = folder_manager.create_epoch_folder(f"{epoch}_kmupdate")
-                    embedding_manager.hdf5_dir = new_hdf5_dir
-                    embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
-                    embedding_manager.load_embeddings()
+                # if cfg.control.save_per_epoch == True:
+                #     new_hdf5_dir = folder_manager.create_epoch_folder(f"{epoch}_kmupdate")
+                #     embedding_manager.hdf5_dir = new_hdf5_dir
+                #     embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
+                #     embedding_manager.load_embeddings()
 
                 # Perform clustering and merge embeddings using proxy embeddings
                 label_embedding = embedding_manager.get_all_embeddings()[1]

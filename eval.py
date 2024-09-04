@@ -45,7 +45,7 @@ def compute_recall_at_k(similarities, k):
     correct_at_k = np.sum(top_k_indices == np.arange(similarities.shape[0])[:, None])
     return correct_at_k / similarities.shape[0]
 
-def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch=0, Ks=[1, 5, 10]):
+def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch=0, Ks=[1, 5, 10], top_k=5):
     # Load unique label embeddings up to 50
     label_embeddings = label_embeddings[:50]
     
@@ -56,6 +56,7 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
     
     all_img_emb = []
     all_txt_emb = []
+    all_comb_emb = {}
     all_best_comb_emb = []
     
     #  (as there are multiple pieces of text for each image)
@@ -106,6 +107,7 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
 
             img_emb, txt_emb = model.encode_img_txt(image_input, text_input)
             
+            #TODO: Save per label embeddings and do Oracle test
             # Convert PyTorch tensors to NumPy arrays
             img_emb_np = img_emb.cpu().numpy()
             txt_emb_np = txt_emb.cpu().numpy()
@@ -114,9 +116,11 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
             wost_cosine_sim = np.ones((batch_size, captions_per_image)) * 1 # Initialize to 1
             best_comb_emb = torch.zeros((batch_size, captions_per_image, label_embeddings.size(1)))
 
-            for label_embedding in label_embeddings:
+            for label_indice, label_embedding in enumerate(label_embeddings):
                 label_embedding = label_embedding.to(device)
                 comb_emb = model.combine(txt_emb, label_embedding.unsqueeze(0).expand(txt_emb.size(0), -1))
+                
+                
 
                 # Calculate cosine similarity within batch using np instead of torch to save memory
                 comb_emb_np = comb_emb.cpu().numpy()
