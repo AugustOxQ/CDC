@@ -157,3 +157,5 @@ res/
 logs/
 data/
 configs/*.yaml
+
+wandb/
