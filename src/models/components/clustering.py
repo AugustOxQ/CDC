@@ -12,6 +12,8 @@ from cuml.manifold import UMAP
 from cuml.dask.manifold import UMAP as MNMG_UMAP
 from cuml import DBSCAN, HDBSCAN
 from cuml.cluster import DBSCAN, HDBSCAN
+from tqdm import tqdm
+import random
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -79,109 +81,59 @@ class Clustering:
         
         return umap_labels, centers
         
-        
-    # def update_clustering_history(self, umap_labels):
-    #     new_history = defaultdict(set)
-        
-    #     for label in torch.unique(umap_labels):
-    #         label_indices = torch.where(umap_labels == label)[0].tolist()
-    #         for idx in label_indices:
-    #             self.cluster_history[idx].add(label)
-    #             new_history[label].update(self.cluster_history[idx])
-
-    #     self.cluster_history = new_history
-
-    # def merge_clusters(self, original_embeddings):
-    #     merged_embeddings = []
-    #     unique_clusters = sorted(self.cluster_history.keys())
-
-    #     for cluster_id in unique_clusters:
-    #         cluster_indices = list(self.cluster_history[cluster_id])
-    #         cluster_embeddings = original_embeddings[cluster_indices]
-    #         merged_embedding = cluster_embeddings.mean(dim=0)
-    #         merged_embeddings.append(merged_embedding)
-
-    #     return torch.stack(merged_embeddings), unique_clusters
-
-    # def kmeans_update(self, umap_labels, centers, original_embeddings, update_type='hard', alpha=0.1):
-    #     updated_embeddings = torch.zeros_like(original_embeddings)
-    #     unique_labels = torch.unique(umap_labels)
-        
-    #     for label in unique_labels:
-    #         label_indices = torch.where(umap_labels == label)[0]
-            
-    #         if len(label_indices) == 1:
-    #             idx = label_indices[0].item()
-    #             updated_embeddings[idx] = original_embeddings[idx]
-    #             continue
-            
-    #         # Collect original embeddings for the current cluster
-    #         cluster_embeddings = original_embeddings[label_indices.cpu()]
-            
-    #         # Compute the centroid in the original 512-dimensional space
-    #         centroid = cluster_embeddings.mean(dim=0)
-            
-    #         for idx in label_indices:
-    #             idx = idx.item()  # Ensure idx is an integer
-                
-    #             if update_type == 'hard':
-    #                 # Hard update: Replace embedding with centroid
-    #                 new_embedding = centroid
-    #             elif update_type == 'soft':
-    #                 # Soft update: Move embedding a bit towards the centroid
-    #                 original_embedding = original_embeddings[idx]
-    #                 new_embedding = original_embedding + alpha * (centroid - original_embedding)
-    #             elif update_type == 'adaptive':
-    #                 # Adaptive soft update: Alpha based on distance to centroid
-    #                 original_embedding = original_embeddings[idx]
-    #                 distance = torch.norm(centroid - original_embedding)
-    #                 adaptive_alpha = alpha * (1 - torch.exp(-distance))  # Adaptive alpha
-    #                 new_embedding = original_embedding + adaptive_alpha * (centroid - original_embedding)
-    #             else:
-    #                 raise ValueError("Invalid update_type. Choose 'hard', 'soft', or 'adaptive'.")
-                
-    #             updated_embeddings[idx] = new_embedding
-                
-    #         # self.update_clustering_history(umap_labels)
-                
-    #     return updated_embeddings
     
-    def kmeans_update(self, umap_labels, original_embeddings, update_type='hard', alpha=0.1, repulsion_factor=0.01):
+    def kmeans_update(self, umap_labels, original_embeddings, update_type='hard', alpha=0.1, repulsion_factor=0.01, random_repulsion=False):
         num_clusters = umap_labels.max().item() + 1
         
         cluster_centers = torch.zeros((num_clusters, original_embeddings.shape[1]), device=original_embeddings.device)
         updated_embeddings = torch.zeros_like(original_embeddings)
         
         # Calculate the mean of the embeddings for each cluster
-        for i in range(num_clusters):
+        print("Calculating cluster centers")
+        for i in tqdm(range(num_clusters)):
             cluster_indices = (umap_labels == i).nonzero(as_tuple=True)[0].to(original_embeddings.device)
             cluster_embeddings = original_embeddings[cluster_indices]
             cluster_centers[i] = cluster_embeddings.mean(dim=0)
             
         # Repulsion force to make clusters far away from each other, only work when number of clusters is between certain range, I guess phase 1 and 2?
         if repulsion_factor > 0 and num_clusters < original_embeddings.shape[0] // 5 and num_clusters > 50:
-            for i in range(num_clusters):
-                for j in range(i + 1, num_clusters):
-                    diff = cluster_centers[i] - cluster_centers[j]
-                    distance = diff.norm(p=2)
-                    if distance > 0:  # Avoid division by zero
-                        repulsion = repulsion_factor * diff / distance
-                        cluster_centers[i] += repulsion
-                        cluster_centers[j] -= repulsion
+            print("Applying repulsion force")
             
+            if random_repulsion:
+                # Randomly select 1/4 of the centroids for repulsion
+                sampled_indices = random.sample(range(num_clusters), num_clusters // 4)
+                for i in tqdm(sampled_indices):  # Iterate over only the sampled centroids
+                    for j in range(i + 1, num_clusters):
+                        diff = cluster_centers[i] - cluster_centers[j]
+                        distance = diff.norm(p=2)
+                        if distance > 0:  # Avoid division by zero
+                            repulsion = repulsion_factor * diff / distance
+                            cluster_centers[i] += repulsion
+                            cluster_centers[j] -= repulsion
+            else:
+                # Apply repulsion force to all centroids
+                for i in tqdm(range(num_clusters)):
+                    for j in range(i + 1, num_clusters):
+                        diff = cluster_centers[i] - cluster_centers[j]
+                        distance = diff.norm(p=2)
+                        if distance > 0:  # Avoid division by zero
+                            repulsion = repulsion_factor * diff / distance
+                            cluster_centers[i] += repulsion
+                            cluster_centers[j] -= repulsion
+                    
+        print("Updating embeddings")
         if update_type == 'hard':
             # Hard update: Directly replace embeddings with their corresponding cluster centers
-            for i in range(num_clusters):
+            for i in tqdm(range(num_clusters)):
                 cluster_indices = (umap_labels == i).nonzero(as_tuple=True)[0].to(original_embeddings.device)
                 updated_embeddings[cluster_indices] = cluster_centers[i]
         elif update_type == 'soft':
             # Soft update: Move embeddings towards their corresponding cluster centers by a factor of alpha
-            for i in range(num_clusters):
+            for i in tqdm(range(num_clusters)):
                 cluster_indices = (umap_labels == i).nonzero(as_tuple=True)[0].to(original_embeddings.device)
                 updated_embeddings[cluster_indices] += alpha * (cluster_centers[i] - original_embeddings[cluster_indices])
 
         return updated_embeddings
-        
         
 
 def main():
@@ -197,7 +149,7 @@ def main():
     
     umap_labels, centers = clustering.get_kmeans(umap_features, n_clusters=1024-30)
     
-    updated_embeddings = clustering.kmeans_update(umap_labels, centers, label_embedding, update_type='hard', alpha=0.1)
+    updated_embeddings = clustering.kmeans_update(umap_labels, label_embedding, update_type='hard', alpha=0.1)
     
     # Check if embeddings have been updated
     differences = torch.any(label_embedding != updated_embeddings, dim=1)
@@ -207,7 +159,7 @@ def main():
     umap_features_new = clustering.get_umap(updated_embeddings)
     umap_labels_new, centers_new = clustering.get_kmeans(umap_features_new, n_clusters=1024-60)
     
-    updated_embeddings_new = clustering.kmeans_update(umap_labels_new, centers_new, updated_embeddings, update_type='hard', alpha=0.1)
+    updated_embeddings_new = clustering.kmeans_update(umap_labels_new, updated_embeddings, update_type='hard', alpha=0.1)
     
     # Check if embeddings have been updated
     differences = torch.any(updated_embeddings != updated_embeddings_new, dim=1)

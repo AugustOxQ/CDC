@@ -2,6 +2,7 @@ import json
 import os
 from turtle import up, update
 import warnings
+import time
 from datetime import datetime
 from altair import sample
 import numpy as np
@@ -192,32 +193,112 @@ def inference_train(model, tokenizer, dataloader, device, epoch=0, Ks=[1, 5, 10]
         "val/raw_better_percentage": raw_better_percentage,
         "val/shuffled_better_percentage": shuffled_better_percentage,
         "val/diversity_score": diversity_score,
-        # "precisions": total_precisions
     }
 
+
+def oracle_test_tti(model, label_embeddings, img_emb, txt_emb, text_to_image_map, device, Ks=[1, 5, 10]):
+    """
+    This uses the oracle method to find the best label embedding for each text by computing the text-image recall@k
+    """
+    # Load unique label embeddings up to 50
+    label_embeddings = label_embeddings[:50].to(device)
+
+    num_images = img_emb.size(0)  # 1000 images
+    num_texts = txt_emb.size(0)   # 5000 texts
+    
+    # To store the best label embedding index for each text
+    best_label_indices = torch.zeros(num_texts, dtype=torch.int32)
+    worst_label_indices = torch.zeros(num_texts, dtype=torch.int32)
+    
+    # To store the recall sum (r-sum) for evaluation
+    total_r_sum = 0.0
+    total_r_sum_worst = 0.0
+    
+    img_emb = img_emb.to(device)
+    txt_emb = txt_emb.to(device)
+    
+    with torch.no_grad():
+        # Iterate over each text
+        for text_id in tqdm(range(num_texts)):
+            # Get the correct image index for this text
+            correct_image_idx = text_to_image_map[text_id].item()
+            
+            # Variable to track the best recall and label embedding index for this text
+            best_r_sum = -1  # Initialize to a low value
+            worst_r_sum = 1  # Initialize to a high value
+            best_label_idx = 0  # Initialize best label embedding index
+            worst_label_idx = 0  # Initialize worst label embedding index
+            
+            # Iterate over each label embedding
+            for label_idx, label_embedding in enumerate(label_embeddings):
+                # Expand the label embedding for the current text embedding
+                expanded_label_emb = label_embedding.unsqueeze(0).expand(txt_emb[text_id:text_id+1].size(0), -1)
+                
+                # Combine text embedding with label embedding
+                comb_emb = model.combine(txt_emb[text_id:text_id+1], expanded_label_emb).to(device)
+                
+                # Normalize combined embedding
+                comb_emb /= torch.norm(comb_emb, dim=1, keepdim=True)
+                
+                # Compute cosine similarity between the combined text embedding and all image embeddings
+                cosine_sim_comb = torch.mm(comb_emb, img_emb.T).flatten()
+                
+                # Get the recall r-sum: find the ranking of the correct image for the current text
+                sorted_sim_indices = torch.argsort(cosine_sim_comb, descending=True)
+                rank_of_correct_image = (sorted_sim_indices == correct_image_idx).nonzero(as_tuple=True)[0].item()
+                
+                # Recall is better if the correct image is ranked higher (closer to index 0)
+                r_sum = 1.0 / (rank_of_correct_image + 1)  # Higher r_sum is better
+                
+                # If this label embedding gives a better recall (higher r_sum), update
+                if r_sum > best_r_sum:
+                    best_r_sum = r_sum
+                    best_label_idx = label_idx
+                
+                # If this label embedding gives a worse recall (lower r_sum), update
+                if r_sum < worst_r_sum:
+                    worst_r_sum = r_sum
+                    worst_label_idx = label_idx
+                    
+                # Clean up intermediate tensors explicitly
+                comb_emb.cpu()  # Move to CPU
+                cosine_sim_comb.cpu()  # Move to CPU
+                sorted_sim_indices.cpu()  # Move to CPU
+            
+            # After iterating over all label embeddings, store the best label index for this text
+            best_label_indices[text_id] = best_label_idx
+            total_r_sum += best_r_sum
+            
+            # Store the worst label index for this text
+            worst_label_indices[text_id] = worst_label_idx
+            total_r_sum_worst += worst_r_sum
+            
+            # Clean memory
+            del best_r_sum, best_label_idx
+            torch.cuda.empty_cache()
+            
+            # # Only for debugging
+            # if text_id == 500:
+            #     break
+    
+    # Return the best label indices per text and the total r-sum (sum of all recall scores)
+    return best_label_indices, worst_label_indices
+    
 
 def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch, Ks=[1, 5, 10]):
     # Load unique label embeddings up to 50
     label_embeddings = label_embeddings[:50]
-    
-    total_samples = 0
-    total_better_count = 0
-    total_improvement = 0.0
-    total_worst_improvement = 0.0
-    
     all_img_emb = []
     all_txt_emb = []
-    all_best_comb_emb = []
     
     #  (as there are multiple pieces of text for each image)
     image_to_text_map = []
-
     # text_to_image_map[i] gives the corresponding image index for the ith text
     text_to_image_map = []
-
     text_index = 0
     image_index = 0
     
+    # Accumulate embeddings for recall calculation
     model.eval()
     with torch.no_grad():
         for batch_id, batch in enumerate(tqdm(dataloader)):
@@ -252,102 +333,50 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
                 # Each of the next captions_per_image text captions correspond to the same image
                 text_to_image_map += [image_index] * captions_per_image
                 image_index += 1
-            
-            # text_input = torch.flatten(text_input, start_dim=0, end_dim=1)
 
             img_emb, txt_emb = model.encode_img_txt(image_input, text_input)
             
-            # Convert PyTorch tensors to NumPy arrays
-            img_emb_np = img_emb.cpu().numpy()
-            txt_emb_np = txt_emb.cpu().numpy()
-
-            best_cosine_sim = np.ones((batch_size, captions_per_image)) * -1 # Initialize to -1
-            wost_cosine_sim = np.ones((batch_size, captions_per_image)) * 1 # Initialize to 1
-            best_comb_emb = torch.zeros((batch_size, captions_per_image, label_embeddings.size(1)))
-
-            for label_embedding in label_embeddings:
-                label_embedding = label_embedding.to(device)
-                comb_emb = model.combine(txt_emb, label_embedding.unsqueeze(0).expand(txt_emb.size(0), -1))
-
-                # Calculate cosine similarity within batch using np instead of torch to save memory
-                comb_emb_np = comb_emb.cpu().numpy()
-                cosine_sim_comb = cosine_similarity(img_emb_np, comb_emb_np)
-
-                # Update best cosine similarity and corresponding label embeddings
-                for i in range(batch_size):
-                    for j in range(5):
-                        current_cosine_sim = cosine_sim_comb[i, i * 5 + j]
-                        if current_cosine_sim > best_cosine_sim[i, j]:
-                            best_cosine_sim[i, j] = current_cosine_sim
-                            best_comb_emb[i, j] = comb_emb.cpu()[i * 5 + j]
-                        if current_cosine_sim < wost_cosine_sim[i, j]:
-                            wost_cosine_sim[i, j] = current_cosine_sim
-                            
-                    # max_cosine_sim_comb = np.max(cosine_sim_comb[i * 5 + j])
-
-            # Compare best cosine similarity with raw cosine similarity
-            cosine_sim_raw = np.array([cosine_similarity(img_emb_np[i:i+1], txt_emb_np[i*5:(i+1)*5]).flatten() for i in range(batch_size)])
-            
-            total_better_count += np.sum(best_cosine_sim > cosine_sim_raw)
-            total_samples += batch_size
-            
-            # Calculate improvement
-            improvement = (best_cosine_sim - cosine_sim_raw) / cosine_sim_raw
-            total_improvement += np.sum(improvement)
-            
-            # Calculate worst improvement
-            worst_improvement = (best_cosine_sim - wost_cosine_sim) / cosine_sim_raw
-            total_worst_improvement += np.sum(worst_improvement)
-            
-            # Accumulate embeddings for recall calculation
             all_img_emb.append(img_emb.cpu())
             all_txt_emb.append(txt_emb.cpu())
-            all_best_comb_emb.append(best_comb_emb)
             
-            del img_emb, txt_emb, image_input, text_input, comb_emb, label_embedding
+            del img_emb, txt_emb, image_input, text_input
             
             torch.cuda.empty_cache()
             
-    # Concatenate all accumulated embeddings
+    # Concate, normalize, and transform embeddings
     all_img_emb = torch.cat(all_img_emb, axis=0)
     all_txt_emb = torch.cat(all_txt_emb, axis=0)
-    all_best_comb_emb = torch.cat(all_best_comb_emb, axis=0)
-    
     text_to_image_map = torch.LongTensor(text_to_image_map).to(device)
     image_to_text_map = torch.LongTensor(image_to_text_map).to(device)
     
+    start_time = time.time()
+    best_label_indices, worst_label_idx = oracle_test_tti(model, label_embeddings, all_img_emb, all_txt_emb, text_to_image_map, device)
+    end_time = time.time()
+    print(f"Oracle test time: {end_time - start_time}")
+    
+    # Get the best label embeddings
+    best_label_embedding = [label_embeddings[bi] for bi in best_label_indices]
+    worst_label_embedding = [label_embeddings[bi] for bi in worst_label_idx]
+    with torch.no_grad():
+        best_label_embedding = torch.stack(best_label_embedding).to(device)
+        all_best_comb_emb = model.combine(all_txt_emb.to(device), best_label_embedding)
+        worst_label_embedding = torch.stack(worst_label_embedding).to(device)
+        all_worst_comb_emb = model.combine(all_txt_emb.to(device), worst_label_embedding)
+    
+    # Normalize embeddings
     all_img_emb /= torch.norm(all_img_emb, dim=1, keepdim=True)
-    all_txt_emb /= torch.norm(all_txt_emb, dim=1, keepdim=True)
+    all_txt_emb /= torch.norm(all_txt_emb, dim=1, keepdim=True)    
+    all_best_comb_emb = all_best_comb_emb.to(all_img_emb.device)
     all_best_comb_emb /= torch.norm(all_best_comb_emb, dim=1, keepdim=True)
-    all_best_comb_emb = all_best_comb_emb.view(-1, all_best_comb_emb.size(2))
+    all_worst_comb_emb = all_worst_comb_emb.to(all_img_emb.device)
+    all_worst_comb_emb /= torch.norm(all_worst_comb_emb, dim=1, keepdim=True)
     
-    # Compute cosine similarities globally
-    cosine_sim_raw_global = cosine_similarity(all_img_emb, all_txt_emb)
-    cosine_sim_comb_global = cosine_similarity(all_img_emb, all_best_comb_emb)
-    
-    # Compute recall@k globally
-    recalls_raw = {k: compute_recall_at_k(cosine_sim_raw_global, k) for k in [1, 5, 10]}
-    recalls_comb = {k: compute_recall_at_k(cosine_sim_comb_global, k) for k in [1, 5, 10]}
-            
-    # Compute and print aggregated results
-    better_percentage = total_better_count / total_samples * 100
-    avg_improvement = total_improvement / total_samples * 100
-    avg_worst_improvement = total_worst_improvement / total_samples * 100
-    print(f"Inference Test - Percentage of better cosine similarity: {better_percentage:.2f}%")
-    print(f"Inference Test - Average improvement over raw cosine similarity: {avg_improvement:.2f}%")
-    print(f"Inference Test - Average worst improvement over raw cosine similarity: {avg_worst_improvement:.2f}%")
-    
+    # Evaluate the embeddings
     metrics_raw = evalrank(all_img_emb, all_txt_emb, text_to_image_map, image_to_text_map, "raw")
+    metrics_best = evalrank(all_img_emb, all_best_comb_emb, text_to_image_map, image_to_text_map, "comb")
+    metrics_worst = evalrank(all_img_emb, all_worst_comb_emb, text_to_image_map, image_to_text_map, "worst")
     
-    metrics_comb = evalrank(all_img_emb, all_best_comb_emb, text_to_image_map, image_to_text_map, "comb")
-    
-    metrics_basic = {
-        "test/better_percentage": better_percentage,
-        "test/avg_improvement": avg_improvement,
-        "test/avg_worst_improvement": avg_worst_improvement
-    }
-    
-    metrics_total = {**metrics_basic, **metrics_raw, **metrics_comb}
+    metrics_total = {**metrics_raw, **metrics_best, **metrics_worst}
     
     return metrics_total
 
@@ -418,7 +447,7 @@ def train(cfg: DictConfig, **kwargs):
             
         # Wandb logger
         wandb_run.log(
-            {
+            {   
                 "train/total_loss": loss.item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
             },
@@ -528,7 +557,7 @@ def run(cfg: DictConfig, **kwargs):
     #     optimizer, T_max=cfg.train.T_max, eta_min=cfg.train.lr_min
     # )
     scheduler = CosineAnnealingWarmRestarts(
-        optimizer, T_0=cfg.train_2.k_means_end_epoch, T_mult=1, eta_min=cfg.train.lr_min
+        optimizer, T_0=cfg.train.warm_up, T_mult=1, eta_min=cfg.train.lr_min
     )
 
     # Callbacks
@@ -549,6 +578,7 @@ def run(cfg: DictConfig, **kwargs):
 
     # Start training
     for epoch in range(max_epoch):
+        wandb_run.log({"train/epoch": epoch})
         logger_epoch = {}
         logger_epoch["epoch"] = epoch
         unique_embeddings = None
@@ -586,7 +616,6 @@ def run(cfg: DictConfig, **kwargs):
             
             # Save epoch metrics
             folder_manager.save_metrics(train_epoch_log, logs_dir, epoch)
-            
             
         if cfg.control.val:
             print("##########Testing train dataset##########")
@@ -643,7 +672,7 @@ def run(cfg: DictConfig, **kwargs):
                 # Check how many embeddings have been updated by k-means
                 differences = torch.any(label_embedding != updated_embeddings, dim=1)
                 num_different_rows = torch.sum(differences).item()
-                print(f"Number of different rows after update: {num_different_rows}")
+                print(f"Number of rows updated by K-means: {num_different_rows}")
                 
                 # update the embeddings
                 embedding_manager.update_all_chunks(sample_ids, updated_embeddings)
@@ -678,23 +707,21 @@ def run(cfg: DictConfig, **kwargs):
                     samples_to_track,
                 )
                 
-            elif epoch >= k_means_end_epoch:
+            elif epoch >= k_means_middle_epoch:
                 print("##########No clustering##########")
                 # Load embeddings
                 embedding_manager.load_embeddings()
                 sample_ids, label_embedding = embedding_manager.get_all_embeddings()
-                _, unique_embeddings = torch.unique(label_embedding, return_inverse=True, dim=0)
-                
+                unique_embeddings, _ = torch.unique(label_embedding, return_inverse=True, dim=0)
+                print(f"Unique embeddings: {unique_embeddings.size(0)}")
             
         if cfg.control.test:
-            if unique_embeddings is not None:
+            if unique_embeddings is not None and epoch >= k_means_middle_epoch:
                 print("##########Testing test dataset##########")
-                print(f"Unique embeddings: {unique_embeddings.size(0)}")
                 inf_test_log = inference_test(model, tokenizer, test_dataloader, unique_embeddings, device, epoch, [1, 5, 10])
                 logger_epoch["inference_test"] = inf_test_log
                 wandb_run.log(inf_test_log)
 
-            
         # Save model, epoch, optimizer, scheduler
         if cfg.control.save:
             # Save merge history
