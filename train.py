@@ -7,6 +7,7 @@ from altair import sample
 import numpy as np
 from pyparsing import WordStart
 from sklearn import metrics
+from sklearn.cluster import k_means
 from sklearn.metrics.pairwise import cosine_similarity
 import random
 
@@ -348,7 +349,7 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
     
     metrics_total = {**metrics_basic, **metrics_raw, **metrics_comb}
     
-    return metrics_total, all_img_emb, all_txt_emb, all_best_comb_emb
+    return metrics_total
 
 
 def train(cfg: DictConfig, **kwargs):
@@ -598,7 +599,7 @@ def run(cfg: DictConfig, **kwargs):
             wandb_run.log({"train/n_clusters": n_clusters})
             
             # Perform clustering and update embeddings by merging
-            if n_clusters >= first_stage_n + 10:
+            if k_means_start_epoch <= epoch < k_means_end_epoch:
                 print(f"##########Epoch {epoch}: Expected number of clusters: {n_clusters}##########")
 
                 # Load embeddings
@@ -677,17 +678,19 @@ def run(cfg: DictConfig, **kwargs):
                     samples_to_track,
                 )
                 
-            else:
+            elif epoch >= k_means_end_epoch:
                 print("##########No clustering##########")
-                unique_embeddings = torch.load(os.path.join(experiment_dir, "unique_embeddings.pt"))
+                # Load embeddings
+                embedding_manager.load_embeddings()
+                sample_ids, label_embedding = embedding_manager.get_all_embeddings()
+                _, unique_embeddings = torch.unique(label_embedding, return_inverse=True, dim=0)
                 
             
-        if cfg.control.test:      
-            if unique_embeddings is not None:      
-                # if unique_embeddings.size(0) <= cfg.eval.max_clusters:
+        if cfg.control.test:
+            if unique_embeddings is not None:
                 print("##########Testing test dataset##########")
                 print(f"Unique embeddings: {unique_embeddings.size(0)}")
-                inf_test_log, all_img_emb, all_txt_emb, all_best_comb_emb = inference_test(model, tokenizer, test_dataloader, unique_embeddings, device, epoch, [1, 5, 10])
+                inf_test_log = inference_test(model, tokenizer, test_dataloader, unique_embeddings, device, epoch, [1, 5, 10])
                 logger_epoch["inference_test"] = inf_test_log
                 wandb_run.log(inf_test_log)
 
