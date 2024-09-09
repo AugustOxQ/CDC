@@ -1,6 +1,6 @@
 import json
 import os
-from turtle import update
+from turtle import up, update
 import warnings
 from datetime import datetime
 from altair import sample
@@ -13,6 +13,7 @@ import random
 import hydra
 from sqlalchemy import all_
 import wandb
+import omegaconf
 
 import torch
 import torch.nn as nn
@@ -348,13 +349,6 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
     metrics_total = {**metrics_basic, **metrics_raw, **metrics_comb}
     
     return metrics_total, all_img_emb, all_txt_emb, all_best_comb_emb
-    
-    # return {
-    #     "test/better_percentage": better_percentage,
-    #     "test/avg_improvement": avg_improvement,
-    #     # "test/recalls_raw": recalls_raw,
-    #     # "test/recalls_comb": recalls_comb
-    # }, all_img_emb, all_txt_emb, all_best_comb_emb
 
 
 def train(cfg: DictConfig, **kwargs):
@@ -380,8 +374,6 @@ def train(cfg: DictConfig, **kwargs):
         
         img_emb, txt_emb, label_embedding, sample_id = batch
         img_emb, txt_emb, label_embedding = img_emb.squeeze(0), txt_emb.squeeze(0), label_embedding.squeeze(0)
-        
-        # sample_id = [int(s) for s in sample_id]
 
         img_emb, txt_emb = img_emb.to(device), txt_emb.to(device)
     
@@ -481,8 +473,9 @@ def run(cfg: DictConfig, **kwargs):
     annotations = json.load(open(cfg.dataset.train_path))
     annotations = annotations[: int(len(annotations) * cfg.dataset.ratio)]
     embedding_manager = EmbeddingManager(
-        annotations, embedding_dim=512, chunk_size=cfg.train.batch_size, hdf5_dir=init_dir, sample_ids_list=sample_ids_list
+        annotations, embedding_dim=512, chunk_size=cfg.train.batch_size, embeddings_dir=init_dir, sample_ids_list=sample_ids_list
     )
+    embedding_manager.load_embeddings()
 
     # Samples to track
     samples_to_track = [0, 1, 2, 3, 4]  # Indices of the samples to track
@@ -534,23 +527,24 @@ def run(cfg: DictConfig, **kwargs):
     #     optimizer, T_max=cfg.train.T_max, eta_min=cfg.train.lr_min
     # )
     scheduler = CosineAnnealingWarmRestarts(
-        optimizer, T_0=cfg.train_2.k_means_slow_epoch, T_mult=1, eta_min=cfg.train.lr_min
+        optimizer, T_0=cfg.train_2.k_means_end_epoch, T_mult=1, eta_min=cfg.train.lr_min
     )
 
     # Callbacks
     logger = []
     max_epoch = cfg.train.max_epochs
     
-    initial_n_clusters = train_dataset.get_len() - cfg.train_2.initial_n_clusters
-    first_stage_n = cfg.train_2.first_stage_n
-    second_stage_n = cfg.train_2.second_stage_n
-    k_means_start_epoch = cfg.train_2.k_means_start_epoch
-    k_means_slow_epoch = cfg.train_2.k_means_slow_epoch
+    initial_n_clusters = train_dataset.get_len() - cfg.train_2.initial_n_clusters # Initial number of clusters
+    first_stage_n = cfg.train_2.first_stage_n # Number of clusters after first stage
+    second_stage_n = cfg.train_2.second_stage_n # Number of clusters after second stage
+    k_means_start_epoch = cfg.train_2.k_means_start_epoch # Start k-means clustering
+    k_means_middle_epoch = cfg.train_2.k_means_middle_epoch # Start slow k-means clustering
+    k_means_end_epoch = cfg.train_2.k_means_end_epoch # End k-means clustering
     update_label_embedding = True # Update label embeddings during training
     
-    assert k_means_start_epoch < k_means_slow_epoch < max_epoch, "Invalid epoch values for k-means clustering"
+    assert k_means_start_epoch <= k_means_end_epoch <= max_epoch, "Invalid epoch values for k-means clustering"
     
-    assert initial_n_clusters > first_stage_n >= second_stage_n, "Invalid number of clusters"
+    assert initial_n_clusters >= first_stage_n >= second_stage_n, "Invalid number of clusters"
 
     # Start training
     for epoch in range(max_epoch):
@@ -564,14 +558,14 @@ def run(cfg: DictConfig, **kwargs):
             
             # # Create new directory for the current epoch
             if cfg.control.save_per_epoch == True:
-                new_hdf5_dir = folder_manager.create_epoch_folder(epoch)
-                embedding_manager.hdf5_dir = new_hdf5_dir
-                embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
-                embedding_manager.load_embeddings()
+                new_embeddings_dir = folder_manager.create_epoch_folder(epoch)
+                embedding_manager.embeddings_dir = new_embeddings_dir
+                embedding_manager.save_embeddings_to_new_folder(new_embeddings_dir)
+            embedding_manager.load_embeddings()
             
-            if epoch == k_means_slow_epoch:
+            if epoch == k_means_end_epoch:
                 update_label_embedding = False
-                print("##########Stopping label embedding updates##########")
+                print("##########Cease label embedding updates##########")
             
             train_epoch_log = train(
                 cfg,
@@ -600,22 +594,16 @@ def run(cfg: DictConfig, **kwargs):
             logger_epoch["inference_train"] = inf_train_log
     
         if cfg.control.train_2: # KMeans update
-            n_clusters = calculate_n_clusters(initial_n_clusters, first_stage_n, second_stage_n, epoch, k_means_start_epoch, k_means_slow_epoch)
+            n_clusters = calculate_n_clusters(initial_n_clusters, first_stage_n, second_stage_n, epoch, k_means_start_epoch, k_means_end_epoch)
             wandb_run.log({"train/n_clusters": n_clusters})
             
+            # Perform clustering and update embeddings by merging
             if n_clusters >= first_stage_n + 10:
-                # Only perform clustering if n_clusters is not 0
                 print(f"##########Epoch {epoch}: Expected number of clusters: {n_clusters}##########")
-            
-                # # Create new directory for the current epoch
-                # if cfg.control.save_per_epoch == True:
-                #     new_hdf5_dir = folder_manager.create_epoch_folder(f"{epoch}_kmupdate")
-                #     embedding_manager.hdf5_dir = new_hdf5_dir
-                #     embedding_manager.save_embeddings_to_new_folder(new_hdf5_dir)
-                #     embedding_manager.load_embeddings()
 
-                # Perform clustering and merge embeddings using proxy embeddings
-                label_embedding = embedding_manager.get_all_embeddings()[1]
+                # Load embeddings
+                embedding_manager.load_embeddings()
+                sample_ids, label_embedding = embedding_manager.get_all_embeddings()
 
                 # Perform UMAP and clustering on unique embeddings
                 print("##########Performing UMAP##########")
@@ -625,15 +613,15 @@ def run(cfg: DictConfig, **kwargs):
                 umap_labels, _ = clustering.get_kmeans(
                 umap_features, n_clusters=n_clusters
                 )
-                umap_features_np = umap_features.cpu().numpy()
-                umap_labels_np = umap_labels.cpu().numpy()
 
                 # Plot UMAP before clustering update
+                umap_features_np = umap_features.cpu().numpy()
+                umap_labels_np = umap_labels.cpu().numpy()
                 plot_umap(
                     umap_features_np, umap_labels_np, plot_dir, epoch, samples_to_track
                 )
-                print("##########Performing clustering update##########")
                 
+                print("##########Performing clustering update##########")
                 # Map clustering results back to the original embeddings
                 updated_embeddings = clustering.kmeans_update(
                     umap_labels=umap_labels,
@@ -648,26 +636,28 @@ def run(cfg: DictConfig, **kwargs):
                 )
                 print(f"Unique embeddings after clustering update: {unique_embeddings.size(0)}")
                 
+                # Save unique embeddings
                 torch.save(unique_embeddings[:50], os.path.join(experiment_dir, f"unique_embeddings.pt"))
-                print(f"Unique embeddings saved to {experiment_dir}")
                 
-                # Check if embeddings have been updated
+                # Check how many embeddings have been updated by k-means
                 differences = torch.any(label_embedding != updated_embeddings, dim=1)
                 num_different_rows = torch.sum(differences).item()
                 print(f"Number of different rows after update: {num_different_rows}")
                 
                 # update the embeddings
-                embedding_manager.update_all_chunks(updated_embeddings)
+                embedding_manager.update_all_chunks(sample_ids, updated_embeddings)
                 embedding_manager.load_embeddings()
                 
+                # Check if the saved embeddings are the same as the updated embeddings
+                # updated_embeddings_2 = embedding_manager.get_all_embeddings()[1]
                 
-                #TODO: Double check this
-                # updated_embeddings = embedding_manager.get_all_embeddings()[1]
+                # unique_embeddings_2, _ = torch.unique(updated_embeddings_2, return_inverse=True, dim=0)
+                # print(f"Unique embeddings loaded: {unique_embeddings_2.size(0)}")
                 
-                # # Check if embeddings have been updated
-                # differences = torch.any(updated_embeddings != label_embedding, dim=1)
+                # # # Check if embeddings have been updated
+                # differences = torch.any(updated_embeddings != updated_embeddings_2, dim=1)
                 # num_different_rows = torch.sum(differences).item()
-                # print(f"Number of different rows after update: {num_different_rows}")
+                # assert num_different_rows == 0, f"Embeddings have not been updated after clustering, {num_different_rows} rows are different"
                 
                 # Calculate the updated UMAP and KMeans clustering
                 umap_features_updated = clustering.get_umap(updated_embeddings)
@@ -688,13 +678,8 @@ def run(cfg: DictConfig, **kwargs):
                 )
                 
             else:
-                print("##########Stop clustering##########")
-                label_embedding = embedding_manager.get_all_embeddings()[1]
-                unique_embeddings, _ = torch.unique(
-                    label_embedding, return_inverse=True, dim=0
-                )
-                # torch.save(unique_embeddings[:50], os.path.join(experiment_dir, f"unique_embeddings_{epoch}.pt"))
-                # print(f"Unique embeddings saved to {experiment_dir}")
+                print("##########No clustering##########")
+                unique_embeddings = torch.load(os.path.join(experiment_dir, "unique_embeddings.pt"))
                 
             
         if cfg.control.test:      
@@ -734,30 +719,35 @@ def run(cfg: DictConfig, **kwargs):
     return logger
 
 
-@hydra.main(config_path="configs", config_name="flickr30k", version_base=None)
+@hydra.main(config_path="configs", config_name="flickr30k_mini", version_base=None)
 def main(cfg):
+    # Set seed
     seed = cfg.seed
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    
+
+    # Initialize wandb
     project = cfg.wandb.project
     entity = cfg.wandb.entity
     tags = cfg.wandb.tags
-
-    # Print config
-    print(OmegaConf.to_yaml(cfg))
-
-    # Save config
+    wandb.require("core")
+    wandb.config = omegaconf.OmegaConf.to_container(
+        cfg, resolve=True, throw_on_missing=True
+    )
+    wandb_run = wandb.init(project=project, entity=entity, tags=tags)
+    
+    # Save a copy of config file
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
     logger_dir = f"logs/{now}_{cfg.log_tag}"
     os.mkdir(logger_dir)
     OmegaConf.save(config=cfg, f=os.path.join(logger_dir, "config.yaml"))
+    # Print config
+    print(OmegaConf.to_yaml(cfg))
     
-    wandb.require("core")
-    wandb_run = wandb.init(project=project, entity=entity, tags=tags)
+    # Run main function
     logger = run(cfg=cfg, logger_dir=logger_dir, wandb_run=wandb_run)
     json.dump(logger, open(os.path.join(logger_dir, "logger.json"), "w"))
     

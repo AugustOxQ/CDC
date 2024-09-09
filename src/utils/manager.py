@@ -1,16 +1,9 @@
-from cgi import test
 import json
 import os
-from altair import sample
-import h5py
 import shutil
 from datetime import datetime
-from filelock import FileLock
 from collections import defaultdict
-from sqlalchemy import all_
-from tqdm import tqdm
 
-from numpy import diff
 import torch
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -42,10 +35,6 @@ class FeatureManager:
         for file_name in os.listdir(self.features_dir):
             if file_name.endswith(".pt"):
                 chunk_file = os.path.join(self.features_dir, file_name)
-                # features = torch.load(chunk_file)
-                # sample_ids = features['sample_ids']
-                # for idx, sample_id in enumerate(sample_ids):
-                #     self.index_mapping[int(sample_id)] = (chunk_file, idx)
     
     def get_chunk(self, chunk_id):
         chunk_file = os.path.join(self.features_dir, f'chunk_{chunk_id}.pt')
@@ -66,21 +55,21 @@ class EmbeddingManager:
         self,
         annotations,
         embedding_dim=512,
-        chunk_size=10000,
-        hdf5_dir="embeddings",
+        chunk_size=1024,
+        embeddings_dir="embeddings",
         load_existing=False,
-        sample_ids_list=None,
+        sample_ids_list: list[int] = [0, 1],
     ):
         self.annotations = annotations
         self.embedding_dim = embedding_dim
         self.chunk_size = chunk_size
-        self.hdf5_dir = hdf5_dir
+        self.embeddings_dir = embeddings_dir
         self.load_existing = load_existing
         
         self.sample_ids_list = sample_ids_list
 
         # Create directory for embedding files if it does not exist
-        os.makedirs(self.hdf5_dir, exist_ok=True)
+        os.makedirs(self.embeddings_dir, exist_ok=True)
 
         # Initialize embedding files and store embeddings in chunks
         self.chunk_files = []
@@ -99,11 +88,11 @@ class EmbeddingManager:
         # Initialize embeddings and store them in chunks
         for chunk_idx in range(0, len(self.sample_ids_list), self.chunk_size):
             chunk_file = os.path.join(
-                self.hdf5_dir, f"embeddings_{chunk_idx // self.chunk_size}.pt"
+                self.embeddings_dir, f"embeddings_{chunk_idx // self.chunk_size}.pt"
             )
             self.chunk_files.append(chunk_file)
             embeddings = {}
-            for i, sample_id in enumerate(
+            for _, sample_id in enumerate(
                 self.sample_ids_list[chunk_idx : chunk_idx + self.chunk_size]
             ):
                 # embeddings[sample_id] = torch.randn(self.embedding_dim) # normally distributed random embeddings
@@ -117,31 +106,18 @@ class EmbeddingManager:
     def load_embeddings(self):
         # Load existing embeddings from chunk files
         self.chunk_files = []
-        for file_name in os.listdir(self.hdf5_dir):
+        for file_name in sorted(os.listdir(self.embeddings_dir)):
             if file_name.endswith(".pt"):
-                chunk_file = os.path.join(self.hdf5_dir, file_name)
+                chunk_file = os.path.join(self.embeddings_dir, file_name)
                 self.chunk_files.append(chunk_file)
                 embeddings = torch.load(chunk_file)
                 for sample_id in embeddings.keys():
                     self.index_mapping[sample_id] = (chunk_file, sample_id)
                     self.embedding_references[sample_id] = sample_id
     
-    def get_all_embeddings(self):
-        # Return unsorted embeddings by loading all chunks and concatenating them
-        sample_ids_list = []
-        label_embeddings_list = []
-        for chunk_id in range(len(self.chunk_files)):
-            sample_ids, label_embeddings = self.get_chunk_embeddings(chunk_id)
-            sample_ids_list.extend(sample_ids)
-            label_embeddings_list.append(label_embeddings)
-        
-        label_embeddings_list = torch.cat(label_embeddings_list)
-        
-        return sample_ids_list, label_embeddings_list
-    
     def get_chunk_embeddings(self, chunk_id):
         # Return embeddings from a specific chunk
-        chunk_file = os.path.join(self.hdf5_dir, f'embeddings_{chunk_id}.pt')
+        chunk_file = os.path.join(self.embeddings_dir, f'embeddings_{chunk_id}.pt')
         if not os.path.exists(chunk_file):
             raise FileNotFoundError(f"Chunk file {chunk_file} not found.")
         all_embeddings = torch.load(chunk_file)
@@ -153,7 +129,7 @@ class EmbeddingManager:
     
     def update_chunk_embeddings(self, chunk_id, sample_ids, new_embeddings):
         # Update embeddings in a specific chunk
-        chunk_file = os.path.join(self.hdf5_dir, f'embeddings_{chunk_id}.pt')
+        chunk_file = os.path.join(self.embeddings_dir, f'embeddings_{chunk_id}.pt')
         
         if not os.path.exists(chunk_file):
             raise FileNotFoundError(f"Chunk file {chunk_file} not found.")
@@ -169,16 +145,24 @@ class EmbeddingManager:
             embeddings[sample_id] = new_embedding
         
         torch.save(embeddings, chunk_file)
+        
+    def get_all_embeddings(self):
+        # Return unsorted embeddings by loading all chunks and concatenating them
+        sample_ids_list = []
+        label_embeddings_list = []
+        for chunk_id in range(len(self.chunk_files)):
+            sample_ids, label_embeddings = self.get_chunk_embeddings(chunk_id)
+            sample_ids_list.extend(sample_ids)
+            label_embeddings_list.append(label_embeddings)
+        
+        label_embeddings_list = torch.cat(label_embeddings_list)
+        
+        return sample_ids_list, label_embeddings_list
     
-    def update_all_chunks(self, new_embeddings):
-        embedding_idx = 0
-        for chunk_file in self.chunk_files:
-            embeddings = torch.load(chunk_file)
-            for sample_id in sorted(embeddings.keys()):
-                new_embedding = new_embeddings[embedding_idx].clone().detach().cpu()
-                embeddings[sample_id] = new_embedding
-                embedding_idx += 1
-            torch.save(embeddings, chunk_file)
+    def update_all_chunks(self, sample_ids, new_embeddings):
+        chunk_size = self.chunk_size
+        for i in range(0, len(sample_ids), chunk_size):
+            self.update_chunk_embeddings(i // chunk_size, sample_ids[i:i+chunk_size], new_embeddings[i:i+chunk_size])
 
     def save_embeddings_to_new_folder(self, new_embeddings_dir):
         # Create new directory for embedding files if it does not exist
@@ -291,28 +275,29 @@ def test_embedding_manager():
     # Set seed to be 42
     random.seed(42)
     # Create fake annotations
-    annotations = list(range(200))
-    sample_ids_list = list(range(200))
+    annotations = list(range(5000))
+    sample_ids_list = list(range(5000))
     # shuffle sample_ids
     sample_ids_list = random.sample(sample_ids_list, len(sample_ids_list))
-    print(sample_ids_list)
-    embedding_manager = EmbeddingManager(annotations, embedding_dim=512, chunk_size=100, hdf5_dir="/project/Deep-Clustering/res/test_embeddings", sample_ids_list=sample_ids_list)
+    print(sample_ids_list[:15])
+    embedding_manager = EmbeddingManager(annotations, embedding_dim=512, chunk_size=1000, embeddings_dir="/project/Deep-Clustering/res/test_embeddings", sample_ids_list=sample_ids_list)
     embedding_manager.initialize_embeddings()
     embedding_manager.load_embeddings()
     sample_ids, embeddings = embedding_manager.get_all_embeddings()
 
     print(embeddings.shape)
-    print(sample_ids)
+    print(sample_ids[:15])
     
-    new_embeddings = torch.randn(200, 512)
-    embedding_manager.update_all_chunks(new_embeddings)
+    new_embeddings = embeddings.clone()
+    new_embeddings[:500] = torch.randn(500, 512)
+    embedding_manager.update_all_chunks(sample_ids, new_embeddings)
         
     embedding_manager.load_embeddings()
     
     updated_sample_ids, updated_embeddings = embedding_manager.get_all_embeddings()
     print(updated_embeddings.shape)
     
-    print(updated_sample_ids)
+    print(updated_sample_ids[:15])
     
     differences = torch.any(embeddings != updated_embeddings, dim=1)
 
@@ -320,19 +305,27 @@ def test_embedding_manager():
     num_different_rows = torch.sum(differences).item()
     print(f"Number of different rows: {num_different_rows}")
     print(f"Number of unchanged rows: {len(embeddings) - num_different_rows}")
+    print("This is the comparison between the original embeddings and the embeddings updated by update_all_chunks, should be 500 different rows")
     
-    new_embeddings_2 = torch.randn(100, 512)
+    new_embeddings_2 = embeddings[:100].clone()
     embedding_manager.update_chunk_embeddings(0, sample_ids[:100], new_embeddings_2)
     embedding_manager.load_embeddings()
     
     updated_sample_ids_2, updated_embeddings_2 = embedding_manager.get_all_embeddings()
     
-    print(updated_sample_ids_2)
+    print(updated_sample_ids_2[:15])
     
     differences_2 = torch.any(updated_embeddings != updated_embeddings_2, dim=1)
     num_different_rows_2 = torch.sum(differences_2).item()
     print(f"Number of different rows: {num_different_rows_2}")
     print(f"Number of unchanged rows: {len(updated_embeddings) - num_different_rows_2}")
+    print("This is the comparison between the original embeddings and the embeddings updated by update_chunk_embeddings, should be 100 different rows")
+    
+    differences_3 = torch.any(updated_embeddings_2 != embeddings, dim=1)
+    num_different_rows_3 = torch.sum(differences_3).item()
+    print(f"Number of different rows: {num_different_rows_3}")
+    print(f"Number of unchanged rows: {len(embeddings) - num_different_rows_3}")
+    print("This is the comparison between the update_chunk_embeddings and update_all_chunks, should be 400 different rows")
 
 
 def main():

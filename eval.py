@@ -46,6 +46,23 @@ def compute_recall_at_k(similarities, k):
     correct_at_k = np.sum(top_k_indices == np.arange(similarities.shape[0])[:, None])
     return correct_at_k / similarities.shape[0]
 
+
+def retrieve_top_k(image_embeddings, text_embeddings, top_k=5):
+    # Normalize the embeddings to ensure cosine similarity works as expected
+    image_embeddings = F.normalize(image_embeddings, p=2, dim=1)  # (1000, 512)
+    text_embeddings = F.normalize(text_embeddings, p=2, dim=1)    # (5000, 512)
+
+    # Compute the cosine similarity matrix between images and texts
+    similarity_matrix = torch.mm(image_embeddings, text_embeddings.t())  # (1000, 5000)
+
+    # Image-to-Text Retrieval: For each image, get the top-k most similar text embeddings
+    _, topk_text_indices = torch.topk(similarity_matrix, top_k, dim=1)
+
+    # Text-to-Image Retrieval: For each text, get the top-k most similar image embeddings
+    _, topk_image_indices = torch.topk(similarity_matrix.t(), top_k, dim=1)
+
+    return topk_text_indices, topk_image_indices
+
 def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch=0, Ks=[1, 5, 10], top_k=5):
     # Load unique label embeddings up to 50
     label_embeddings = label_embeddings[:50]
@@ -121,7 +138,10 @@ def inference_test(model, tokenizer, dataloader, label_embeddings, device, epoch
                 label_embedding = label_embedding.to(device)
                 comb_emb = model.combine(txt_emb, label_embedding.unsqueeze(0).expand(txt_emb.size(0), -1))
                 
+                top_k_text_indices, top_k_image_indices = retrieve_top_k(img_emb, comb_emb, 10)
                 
+                torch.save(top_k_text_indices, f"other/retrieval_res/top_k_text_indices_{label_indice}.pt")
+                torch.save(top_k_image_indices, f"other/retrieval_res/top_k_image_indices_{label_indice}.pt")
 
                 # Calculate cosine similarity within batch using np instead of torch to save memory
                 comb_emb_np = comb_emb.cpu().numpy()
@@ -276,10 +296,10 @@ def main(cfg):
     torch.cuda.manual_seed_all(seed)
 
     # Set path
-    experiment_dir = "res/20240904_101309_flickr30k-preextracted"
+    experiment_dir = "res/20240904_102707_flickr30k-preextracted"
     model_path = os.path.join(experiment_dir, "final_model.pth")
     embedding_path = os.path.join(experiment_dir, "init")
-    unique_embeddings_path = os.path.join(experiment_dir, "unique_embeddings_9.pt")
+    unique_embeddings_path = os.path.join(experiment_dir, "unique_embeddings.pt")
     logger = run(cfg=cfg, model_path = model_path, embedding_path = embedding_path, experiment_dir = experiment_dir, unique_embeddings_path = unique_embeddings_path)
 
 
