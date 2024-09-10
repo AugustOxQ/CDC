@@ -208,7 +208,7 @@ def oracle_test_tti(model, label_embeddings, img_emb, txt_emb, text_to_image_map
     
     # To store the best label embedding index for each text
     best_label_indices = torch.zeros(num_texts, dtype=torch.int32)
-    worst_label_indices = torch.zeros(num_texts, dtype=torch.int32)
+    worst_label_indices = torch.ones(num_texts, dtype=torch.int32)
     
     # To store the recall sum (r-sum) for evaluation
     total_r_sum = 0.0
@@ -224,8 +224,8 @@ def oracle_test_tti(model, label_embeddings, img_emb, txt_emb, text_to_image_map
             correct_image_idx = text_to_image_map[text_id].item()
             
             # Variable to track the best recall and label embedding index for this text
-            best_r_sum = -1  # Initialize to a low value
-            worst_r_sum = 1  # Initialize to a high value
+            best_rank = num_texts # Initialize to a high value
+            worst_rank = 1  # Initialize to a low value
             best_label_idx = 0  # Initialize best label embedding index
             worst_label_idx = 0  # Initialize worst label embedding index
             
@@ -247,17 +247,17 @@ def oracle_test_tti(model, label_embeddings, img_emb, txt_emb, text_to_image_map
                 sorted_sim_indices = torch.argsort(cosine_sim_comb, descending=True)
                 rank_of_correct_image = (sorted_sim_indices == correct_image_idx).nonzero(as_tuple=True)[0].item()
                 
-                # Recall is better if the correct image is ranked higher (closer to index 0)
-                r_sum = 1.0 / (rank_of_correct_image + 1)  # Higher r_sum is better
+                # Recall is better if the correct image is ranked lower (closer to 1)
+                rank = rank_of_correct_image + 1  # Higher r_sum is better
                 
-                # If this label embedding gives a better recall (higher r_sum), update
-                if r_sum > best_r_sum:
-                    best_r_sum = r_sum
+                # If this label embedding gives a better recall (lower rank), update
+                if rank <= best_rank:
+                    best_rank = rank
                     best_label_idx = label_idx
                 
-                # If this label embedding gives a worse recall (lower r_sum), update
-                if r_sum < worst_r_sum:
-                    worst_r_sum = r_sum
+                # If this label embedding gives a worse recall (higher rank), update
+                if rank >= worst_rank:
+                    worst_rank = rank
                     worst_label_idx = label_idx
                     
                 # Clean up intermediate tensors explicitly
@@ -267,21 +267,28 @@ def oracle_test_tti(model, label_embeddings, img_emb, txt_emb, text_to_image_map
             
             # After iterating over all label embeddings, store the best label index for this text
             best_label_indices[text_id] = best_label_idx
-            total_r_sum += best_r_sum
+            total_r_sum += best_rank
             
             # Store the worst label index for this text
             worst_label_indices[text_id] = worst_label_idx
-            total_r_sum_worst += worst_r_sum
+            total_r_sum_worst += worst_rank
             
             # Clean memory
-            del best_r_sum, best_label_idx
+            del best_rank, best_label_idx, worst_label_idx
             torch.cuda.empty_cache()
             
-            # # Only for debugging
+            # # Only process the first 500 texts            
             # if text_id == 500:
             #     break
     
     # Return the best label indices per text and the total r-sum (sum of all recall scores)
+    print(f"Total r-sum: {total_r_sum}")
+    print(f"Total r-sum (worst): {total_r_sum_worst}")
+    
+    # Count how many times the best label index is different from the worst label index
+    different_indices = torch.sum(best_label_indices[:500] != worst_label_indices[:500]).item()
+    print(f"Different indices: {different_indices}")
+    
     return best_label_indices, worst_label_indices
     
 
@@ -644,12 +651,13 @@ def run(cfg: DictConfig, **kwargs):
                 umap_features, n_clusters=n_clusters
                 )
 
-                # Plot UMAP before clustering update
-                umap_features_np = umap_features.cpu().numpy()
-                umap_labels_np = umap_labels.cpu().numpy()
-                plot_umap(
-                    umap_features_np, umap_labels_np, plot_dir, epoch, samples_to_track
-                )
+                if cfg.control.save:
+                    # Plot UMAP before clustering update
+                    umap_features_np = umap_features.cpu().numpy()
+                    umap_labels_np = umap_labels.cpu().numpy()
+                    plot_umap(
+                        umap_features_np, umap_labels_np, plot_dir, epoch, samples_to_track
+                    )
                 
                 print("##########Performing clustering update##########")
                 # Map clustering results back to the original embeddings
@@ -689,23 +697,24 @@ def run(cfg: DictConfig, **kwargs):
                 # num_different_rows = torch.sum(differences).item()
                 # assert num_different_rows == 0, f"Embeddings have not been updated after clustering, {num_different_rows} rows are different"
                 
-                # Calculate the updated UMAP and KMeans clustering
-                umap_features_updated = clustering.get_umap(updated_embeddings)
-                umap_labels_updated, _ = clustering.get_kmeans(
-                    umap_features_updated, n_clusters=n_clusters
-                )
-                
-                umap_features_np_updated = umap_features_updated.cpu().numpy()
-                umap_labels_np_updated = umap_labels_updated.cpu().numpy()
+                if cfg.control.save:
+                    # Calculate the updated UMAP and KMeans clustering
+                    umap_features_updated = clustering.get_umap(updated_embeddings)
+                    umap_labels_updated, _ = clustering.get_kmeans(
+                        umap_features_updated, n_clusters=n_clusters
+                    )
+                    
+                    umap_features_np_updated = umap_features_updated.cpu().numpy()
+                    umap_labels_np_updated = umap_labels_updated.cpu().numpy()
 
-                # Plot UMAP after clustering update
-                plot_umap(
-                    umap_features_np_updated,
-                    umap_labels_np_updated,
-                    plot_dir,
-                    f"{epoch}_kmupdate",
-                    samples_to_track,
-                )
+                    # Plot UMAP after clustering update
+                    plot_umap(
+                        umap_features_np_updated,
+                        umap_labels_np_updated,
+                        plot_dir,
+                        f"{epoch}_kmupdate",
+                        samples_to_track,
+                    )
                 
             elif epoch >= k_means_middle_epoch:
                 print("##########No clustering##########")

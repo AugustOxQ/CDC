@@ -190,7 +190,7 @@ def evalrank(image_embeddings, text_embeddings, text_to_image_map, image_to_text
     # Sort in descending order; first is the biggest logit
     inds = torch.argsort(dist_matrix, dim=1, descending=True)
     inds = inds.to(device)
-    print(inds.shape)
+    # print(inds.shape)
 
     text_to_image_recall = []
 
@@ -213,7 +213,7 @@ def evalrank(image_embeddings, text_embeddings, text_to_image_map, image_to_text
     # Sort in descending order; first is the biggest logit
     inds = torch.argsort(dist_matrix, dim=1, descending=True)
     inds = inds.to(device)
-    print(inds.shape)
+    # print(inds.shape)
 
     image_to_text_recall = []
 
@@ -255,6 +255,7 @@ def evalrank(image_embeddings, text_embeddings, text_to_image_map, image_to_text
         f"{kwd}/r_sum": sum(text_to_image_recall) + sum(image_to_text_recall),
     }
 
+    print(f"#####################{kwd}#########################")
     for key, value in metrics.items():
         print(f"{key}: {value}")
 
