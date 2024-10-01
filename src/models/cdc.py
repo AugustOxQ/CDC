@@ -1,12 +1,10 @@
 import math
-import numpy as np
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.init
-import torchvision
 from transformers import CLIPModel
-from torch.autograd import Variable
 
 from .components.combiner_network import Combiner
 
@@ -16,22 +14,25 @@ def get_clip(trainable=False):
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     # Set parameters to be non-trainable
     if not trainable:
-        for param in model.parameters():
+        for param in model.parameters():  # type: ignore
             param.requires_grad = False
     return model
 
 
 def l2norm(x):
-    """L2-normalize columns of x"""
+    """L2-normalize columns of x."""
     norm = torch.pow(x, 2).sum(dim=-1, keepdim=True).sqrt()
     return torch.div(x, norm)
 
 
 class TransformerEncoder(nn.Module):
-    """Transformer encoder module as used in BERT, etc. Used for encoding extra text features."""
+    """Transformer encoder module as used in BERT, etc.
+
+    Used for encoding extra text features.
+    """
 
     def __init__(self, d_model=512, nhead=8, num_layers=4):
-        super(TransformerEncoder, self).__init__()
+        super().__init__()
         encoder_layers = nn.TransformerEncoderLayer(d_model, nhead)
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layers, num_layers, enable_nested_tensor=False
@@ -43,69 +44,73 @@ class TransformerEncoder(nn.Module):
 
 
 class CDC(nn.Module):
-    """CLIP-based Deep Clustering (CDC) module"""
+    """CLIP-based Deep Clustering (CDC) module."""
 
-    def __init__(self, clip_trainable=False, d_model=512, nhead=8, num_layers=4):
-        super(CDC, self).__init__()
+    def __init__(self, clip_trainable=False, d_model=512, nhead=8, num_layers=2):
+        super().__init__()
         # Frozen CLIP as feature extractor
         self.clip = get_clip(clip_trainable)
 
-        # The label encoder is a transformer encoder
-        self.label_encoder = TransformerEncoder(d_model, nhead, num_layers)
+        # Vision Model
+        self.clip_vm = self.clip.vision_model  # type: ignore
+        self.clip_vproj = self.clip.visual_projection  # type: ignore
+
+        # Textual Model
+        self.clip_tm = self.clip.text_model  # type: ignore
+        self.clip_tproj = self.clip.text_projection  # type: ignore
+
         # Identity function for now
-        # self.label_encoder = nn.Identity()
+        self.label_encoder = nn.Identity()
 
         # Combiner network to combine text and label features
-        self.combiner = Combiner(512, 512, 512)
+        self.combiner = Combiner(512, 512, d_model, num_heads=nhead, num_layers=num_layers)
 
     def encode_img(self, images):
         # Extract image features
-        img_emb = self.clip.get_image_features(**images)
-        return img_emb
+        img_output = self.clip_vm(**images)
+        img_emb = self.clip_vproj(img_output.pooler_output)  # CLS token
+        img_full = self.clip_vproj(img_output.last_hidden_state)  # Full image embeddings
+
+        return img_emb, img_full
 
     def encode_txt(self, texts):
         # Extract text features
-        txt_emb = self.clip.get_text_features(**texts)
-        return txt_emb
+        txt_output = self.clip_tm(**texts)
+        txt_emb = self.clip_tproj(txt_output.pooler_output)  # CLS token
+        txt_full = self.clip_tproj(txt_output.last_hidden_state)  # Full text embeddings
+
+        return txt_emb, txt_full
 
     def encode_img_txt(self, images, texts):
         # Extract image and text features
-        img_emb = self.clip.get_image_features(**images)
-        txt_emb = self.clip.get_text_features(**texts)
 
-        return img_emb, txt_emb
+        img_emb, img_full = self.encode_img(images)
+        txt_emb, txt_full = self.encode_txt(texts)
 
-    def combine_raw(self, texts, labels):
+        return img_emb, txt_emb, img_full, txt_full
 
-        txt_emb = self.clip.get_text_features(**texts)  # (batch_size, 512)
-
+    def combine(self, txt_emb, txt_full, labels):
         # Encode the labels
         lbl_emb = self.label_encoder(labels)  # (batch_size, 512)
-        comb_emb = self.combiner(txt_emb, lbl_emb)  # (batch_size, 512)
-
-        return comb_emb
-
-    def combine(self, txt_emb, labels):
-        # Encode the labels
-        lbl_emb = self.label_encoder(labels)  # (batch_size, 512)
-        comb_emb = self.combiner(txt_emb, lbl_emb)  # (batch_size, 512)
+        comb_emb = self.combiner(txt_emb, txt_full, lbl_emb)  # (batch_size, 512)
 
         return comb_emb
 
     def forward(self, images, texts, labels):
         # Extract image and text features
-        img_emb = self.clip.get_image_features(**images)  # (batch_size, 512)
-        txt_emb = self.clip.get_text_features(**texts)  # (batch_size, 512)
+
+        img_emb, txt_emb, _, txt_full = self.encode_img_txt(images, texts)
 
         # Encode the labels
         lbl_emb = self.label_encoder(labels)  # (batch_size, 512)
 
         # Combine text and label features
-        comb_emb = self.combiner(txt_emb, lbl_emb)  # (batch_size, 512)
+        comb_emb = self.combiner(txt_emb, txt_full, lbl_emb)  # (batch_size, 512)
 
         return (
             img_emb,
             txt_emb,
+            txt_full,
             lbl_emb,
             comb_emb,
         )  # For now we only need img_emb and comb_emb to calculate the loss
@@ -113,9 +118,9 @@ class CDC(nn.Module):
 
 def main():
     # Load pretrained model
-    from transformers import AutoProcessor, CLIPModel
     import requests
     from PIL import Image
+    from transformers import AutoProcessor, CLIPModel
 
     processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
     url = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -123,9 +128,7 @@ def main():
     label = torch.randn(2, 512)
 
     image_input = processor(images=[image, image], return_tensors="pt")
-    text_input = processor(
-        ["a photo of a cat", "a photo of a dog"], return_tensors="pt"
-    )
+    text_input = processor(["a photo of a cat", "a photo of a dog"], return_tensors="pt")
 
     model = CDC()
 

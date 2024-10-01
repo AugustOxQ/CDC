@@ -1,0 +1,282 @@
+// Package Structure
+digraph {
+	"__init__.py" [label="__init__.py"]
+	"loss.py" [label="loss.py"]
+	ContrastiveLoss [label=ContrastiveLoss]
+	"loss.py" -> ContrastiveLoss
+	ClipLoss [label=ClipLoss]
+	"loss.py" -> ClipLoss
+	CosineLoss [label=CosineLoss]
+	"loss.py" -> CosineLoss
+	CosineLossR [label=CosineLossR]
+	"loss.py" -> CosineLossR
+	DiversityLoss [label=DiversityLoss]
+	"loss.py" -> DiversityLoss
+	MeanSquareLoss [label=MeanSquareLoss]
+	"loss.py" -> MeanSquareLoss
+	norm_features [label=norm_features]
+	"loss.py" -> norm_features
+	cross_entropy [label=cross_entropy]
+	"loss.py" -> cross_entropy
+	main [label=main]
+	"loss.py" -> main
+	__init__ [label=__init__]
+	"loss.py" -> __init__
+	forward [label=forward]
+	"loss.py" -> forward
+	__init__ [label=__init__]
+	"loss.py" -> __init__
+	forward [label=forward]
+	"loss.py" -> forward
+	__init__ [label=__init__]
+	"loss.py" -> __init__
+	forward [label=forward]
+	"loss.py" -> forward
+	__init__ [label=__init__]
+	"loss.py" -> __init__
+	forward [label=forward]
+	"loss.py" -> forward
+	__init__ [label=__init__]
+	"loss.py" -> __init__
+	forward [label=forward]
+	"loss.py" -> forward
+	__init__ [label=__init__]
+	"loss.py" -> __init__
+	forward [label=forward]
+	"loss.py" -> forward
+	"cdc_datamodule.py" [label="cdc_datamodule.py"]
+	FeatureExtractionDataset [label=FeatureExtractionDataset]
+	"cdc_datamodule.py" -> FeatureExtractionDataset
+	FeatureExtractionDataset__ [label=FeatureExtractionDataset__]
+	"cdc_datamodule.py" -> FeatureExtractionDataset__
+	CDC_train_preextract [label=CDC_train_preextract]
+	"cdc_datamodule.py" -> CDC_train_preextract
+	CDC_test [label=CDC_test]
+	"cdc_datamodule.py" -> CDC_test
+	test [label=test]
+	"cdc_datamodule.py" -> test
+	main [label=main]
+	"cdc_datamodule.py" -> main
+	__init__ [label=__init__]
+	"cdc_datamodule.py" -> __init__
+	__len__ [label=__len__]
+	"cdc_datamodule.py" -> __len__
+	__getitem__ [label=__getitem__]
+	"cdc_datamodule.py" -> __getitem__
+	__init__ [label=__init__]
+	"cdc_datamodule.py" -> __init__
+	__len__ [label=__len__]
+	"cdc_datamodule.py" -> __len__
+	__getitem__ [label=__getitem__]
+	"cdc_datamodule.py" -> __getitem__
+	__init__ [label=__init__]
+	"cdc_datamodule.py" -> __init__
+	__len__ [label=__len__]
+	"cdc_datamodule.py" -> __len__
+	get_len [label=get_len]
+	"cdc_datamodule.py" -> get_len
+	__getitem__ [label=__getitem__]
+	"cdc_datamodule.py" -> __getitem__
+	__init__ [label=__init__]
+	"cdc_datamodule.py" -> __init__
+	__len__ [label=__len__]
+	"cdc_datamodule.py" -> __len__
+	__getitem__ [label=__getitem__]
+	"cdc_datamodule.py" -> __getitem__
+	"__init__.py" [label="__init__.py"]
+	"__init__.py" [label="__init__.py"]
+	"tmp.py" [label="tmp.py"]
+	CDC_train [label=CDC_train]
+	"tmp.py" -> CDC_train
+	CC_train [label=CC_train]
+	"tmp.py" -> CC_train
+	__init__ [label=__init__]
+	"tmp.py" -> __init__
+	__len__ [label=__len__]
+	"tmp.py" -> __len__
+	__getitem__ [label=__getitem__]
+	"tmp.py" -> __getitem__
+	__init__ [label=__init__]
+	"tmp.py" -> __init__
+	__len__ [label=__len__]
+	"tmp.py" -> __len__
+	__getitem__ [label=__getitem__]
+	"tmp.py" -> __getitem__
+	"__init__.py" [label="__init__.py"]
+	"cdc.py" [label="cdc.py"]
+	TransformerEncoder [label=TransformerEncoder]
+	"cdc.py" -> TransformerEncoder
+	CDC [label=CDC]
+	"cdc.py" -> CDC
+	get_clip [label=get_clip]
+	"cdc.py" -> get_clip
+	l2norm [label=l2norm]
+	"cdc.py" -> l2norm
+	main [label=main]
+	"cdc.py" -> main
+	__init__ [label=__init__]
+	"cdc.py" -> __init__
+	forward [label=forward]
+	"cdc.py" -> forward
+	__init__ [label=__init__]
+	"cdc.py" -> __init__
+	encode_img [label=encode_img]
+	"cdc.py" -> encode_img
+	encode_txt [label=encode_txt]
+	"cdc.py" -> encode_txt
+	encode_full_txt [label=encode_full_txt]
+	"cdc.py" -> encode_full_txt
+	encode_img_txt [label=encode_img_txt]
+	"cdc.py" -> encode_img_txt
+	combine_raw [label=combine_raw]
+	"cdc.py" -> combine_raw
+	combine [label=combine]
+	"cdc.py" -> combine
+	forward [label=forward]
+	"cdc.py" -> forward
+	"__init__.py" [label="__init__.py"]
+	"clustering.py" [label="clustering.py"]
+	Clustering [label=Clustering]
+	"clustering.py" -> Clustering
+	main [label=main]
+	"clustering.py" -> main
+	__init__ [label=__init__]
+	"clustering.py" -> __init__
+	initialize_cluster [label=initialize_cluster]
+	"clustering.py" -> initialize_cluster
+	close_cluster [label=close_cluster]
+	"clustering.py" -> close_cluster
+	get_umap [label=get_umap]
+	"clustering.py" -> get_umap
+	get_kmeans [label=get_kmeans]
+	"clustering.py" -> get_kmeans
+	get_hdbscan [label=get_hdbscan]
+	"clustering.py" -> get_hdbscan
+	kmeans_update [label=kmeans_update]
+	"clustering.py" -> kmeans_update
+	"combiner_network.py" [label="combiner_network.py"]
+	Combiner_basic [label=Combiner_basic]
+	"combiner_network.py" -> Combiner_basic
+	Combiner [label=Combiner]
+	"combiner_network.py" -> Combiner
+	__init__ [label=__init__]
+	"combiner_network.py" -> __init__
+	forward [label=forward]
+	"combiner_network.py" -> forward
+	__init__ [label=__init__]
+	"combiner_network.py" -> __init__
+	forward [label=forward]
+	"combiner_network.py" -> forward
+	"simple_dense_net.py" [label="simple_dense_net.py"]
+	SimpleDenseNet [label=SimpleDenseNet]
+	"simple_dense_net.py" -> SimpleDenseNet
+	__init__ [label=__init__]
+	"simple_dense_net.py" -> __init__
+	forward [label=forward]
+	"simple_dense_net.py" -> forward
+	"__init__.py" [label="__init__.py"]
+	"inference.py" [label="inference.py"]
+	random_sample_with_replacement [label=random_sample_with_replacement]
+	"inference.py" -> random_sample_with_replacement
+	sample_label_embeddings [label=sample_label_embeddings]
+	"inference.py" -> sample_label_embeddings
+	compute_recall_at_k [label=compute_recall_at_k]
+	"inference.py" -> compute_recall_at_k
+	extract_and_store_features [label=extract_and_store_features]
+	"inference.py" -> extract_and_store_features
+	inference_train [label=inference_train]
+	"inference.py" -> inference_train
+	oracle_test_tti [label=oracle_test_tti]
+	"inference.py" -> oracle_test_tti
+	oracle_test_itt [label=oracle_test_itt]
+	"inference.py" -> oracle_test_itt
+	inference_test [label=inference_test]
+	"inference.py" -> inference_test
+	"evaltools.py" [label="evaltools.py"]
+	calculate_average_precision [label=calculate_average_precision]
+	"evaltools.py" -> calculate_average_precision
+	calculate_metrics [label=calculate_metrics]
+	"evaltools.py" -> calculate_metrics
+	encode_data [label=encode_data]
+	"evaltools.py" -> encode_data
+	evalrank [label=evalrank]
+	"evaltools.py" -> evalrank
+	main [label=main]
+	"evaltools.py" -> main
+	"manager.py" [label="manager.py"]
+	FeatureManager [label=FeatureManager]
+	"manager.py" -> FeatureManager
+	EmbeddingManager [label=EmbeddingManager]
+	"manager.py" -> EmbeddingManager
+	FolderManager [label=FolderManager]
+	"manager.py" -> FolderManager
+	find_device [label=find_device]
+	"manager.py" -> find_device
+	test_embedding_manager [label=test_embedding_manager]
+	"manager.py" -> test_embedding_manager
+	main [label=main]
+	"manager.py" -> main
+	__init__ [label=__init__]
+	"manager.py" -> __init__
+	add_features_chunk [label=add_features_chunk]
+	"manager.py" -> add_features_chunk
+	load_features [label=load_features]
+	"manager.py" -> load_features
+	get_chunk [label=get_chunk]
+	"manager.py" -> get_chunk
+	_get_chunk_file_and_idx [label=_get_chunk_file_and_idx]
+	"manager.py" -> _get_chunk_file_and_idx
+	debug_print [label=debug_print]
+	"manager.py" -> debug_print
+	__init__ [label=__init__]
+	"manager.py" -> __init__
+	initialize_embeddings [label=initialize_embeddings]
+	"manager.py" -> initialize_embeddings
+	load_embeddings [label=load_embeddings]
+	"manager.py" -> load_embeddings
+	get_chunk_embeddings [label=get_chunk_embeddings]
+	"manager.py" -> get_chunk_embeddings
+	update_chunk_embeddings [label=update_chunk_embeddings]
+	"manager.py" -> update_chunk_embeddings
+	get_all_embeddings [label=get_all_embeddings]
+	"manager.py" -> get_all_embeddings
+	update_all_chunks [label=update_all_chunks]
+	"manager.py" -> update_all_chunks
+	save_embeddings_to_new_folder [label=save_embeddings_to_new_folder]
+	"manager.py" -> save_embeddings_to_new_folder
+	__init__ [label=__init__]
+	"manager.py" -> __init__
+	initialize_experiment [label=initialize_experiment]
+	"manager.py" -> initialize_experiment
+	load_experiment [label=load_experiment]
+	"manager.py" -> load_experiment
+	load_epoch_folder [label=load_epoch_folder]
+	"manager.py" -> load_epoch_folder
+	create_epoch_folder [label=create_epoch_folder]
+	"manager.py" -> create_epoch_folder
+	create_plot_folder [label=create_plot_folder]
+	"manager.py" -> create_plot_folder
+	create_checkpoint_folder [label=create_checkpoint_folder]
+	"manager.py" -> create_checkpoint_folder
+	create_logs_folder [label=create_logs_folder]
+	"manager.py" -> create_logs_folder
+	create_directories [label=create_directories]
+	"manager.py" -> create_directories
+	save_model [label=save_model]
+	"manager.py" -> save_model
+	save_metrics [label=save_metrics]
+	"manager.py" -> save_metrics
+	save_final_model [label=save_final_model]
+	"manager.py" -> save_final_model
+	save_merge_history [label=save_merge_history]
+	"manager.py" -> save_merge_history
+	"tools.py" [label="tools.py"]
+	calculate_n_clusters2 [label=calculate_n_clusters2]
+	"tools.py" -> calculate_n_clusters2
+	calculate_n_clusters [label=calculate_n_clusters]
+	"tools.py" -> calculate_n_clusters
+	plot_umap [label=plot_umap]
+	"tools.py" -> plot_umap
+	main [label=main]
+	"tools.py" -> main
+}

@@ -24,8 +24,8 @@ import datetime
 
 
 def calculate_average_precision(correct_positions, total_relevant):
-    """
-    Calculate Average Precision (AP) for the given ranks of relevant documents.
+    """Calculate Average Precision (AP) for the given ranks of relevant documents.
+
     correct_positions: Tensor of ranks where relevant documents were retrieved.
     total_relevant: Total number of relevant documents for the query.
     """
@@ -41,8 +41,8 @@ def calculate_average_precision(correct_positions, total_relevant):
 
 
 def calculate_metrics(inds, mappings, captions_per_image):
-    """
-    Calculate R-Precision and mAP for a set of rankings (inds) given the correct mappings.
+    """Calculate R-Precision and mAP for a set of rankings (inds) given the correct mappings.
+
     inds: Sorted indices for predictions.
     mappings: Correct mappings from queries (texts or images) to targets (images or texts).
     captions_per_image: Number of captions per image, used for calculating R-Precision for i2t.
@@ -113,7 +113,6 @@ def encode_data(model, data_loader, tokenizer, label_embeddings: Tensor, device=
     image_index = 0
 
     with torch.no_grad():
-
         for batch_id, batch in enumerate(tqdm(data_loader)):
             image, text = batch
             image = image.to(device)
@@ -124,7 +123,7 @@ def encode_data(model, data_loader, tokenizer, label_embeddings: Tensor, device=
                 truncation=True,
                 max_length=77,
             ).to(device)
-            
+
             batch_size = image["pixel_values"].shape[0]
             captions_per_image = 5
 
@@ -142,14 +141,14 @@ def encode_data(model, data_loader, tokenizer, label_embeddings: Tensor, device=
             captions = torch.flatten(captions, start_dim=0, end_dim=1)
 
             img_emb, txt_emb = model.encode_img_txt(image, captions)
-            
+
             # Convert PyTorch tensors to NumPy arrays
             img_emb_np = img_emb.cpu().numpy()
             txt_emb_np = txt_emb.cpu().numpy()
 
             best_cosine_sim = np.full(batch_size, -1.0)  # Initialize with -1
             best_comb_emb = np.zeros((batch_size, label_embeddings.size(1)))
-            
+
             img_embs.append(img_emb)
             cap_embs.append(txt_emb)
 
@@ -164,7 +163,9 @@ def encode_data(model, data_loader, tokenizer, label_embeddings: Tensor, device=
     return image_embeddings, text_embeddings, text_to_image_map, image_to_text_map
 
 
-def evalrank(image_embeddings, text_embeddings, text_to_image_map, image_to_text_map, kwd: str = ""):
+def evalrank(
+    image_embeddings, text_embeddings, text_to_image_map, image_to_text_map, kwd: str = ""
+):
     print(image_embeddings.shape, text_embeddings.shape)
     print(text_to_image_map.shape, image_to_text_map.shape)
 
@@ -176,35 +177,33 @@ def evalrank(image_embeddings, text_embeddings, text_to_image_map, image_to_text
         f"Number of images: {num_im}, Number of texts: {num_text}, Captions per image: {captions_per_image}"
     )
 
-    # text-to-image recall
-    print("Text-to-image recall...")
+    # # text-to-image recall
+    # print("Text-to-image recall...")
 
-    dist_matrix = (
-        text_embeddings @ image_embeddings.T
-    )  # dist_matrix[i] gives logits for ith text
+    dist_matrix = text_embeddings @ image_embeddings.T  # dist_matrix[i] gives logits for ith text
 
     # Note: this matrix is pretty big (5000 x 25000 with dtype float16 = 250MB)
     #  torch.argsort runs out of memory for me (6GB VRAM) so I move to CPU for sorting
     dist_matrix = dist_matrix.cpu()
 
-    # Sort in descending order; first is the biggest logit
-    inds = torch.argsort(dist_matrix, dim=1, descending=True)
-    inds = inds.to(device)
-    # print(inds.shape)
+    # # Sort in descending order; first is the biggest logit
+    # inds = torch.argsort(dist_matrix, dim=1, descending=True)
+    # inds = inds.to(device)
+    # # print(inds.shape)
 
-    text_to_image_recall = []
+    # text_to_image_recall = []
 
-    for k in k_vals:
-        # Extract top k indices only
-        topk = inds[:, :k]
+    # for k in k_vals:
+    #     # Extract top k indices only
+    #     topk = inds[:, :k]
 
-        # Correct iff one of the top_k values equals the correct image (as given by text_to_image_map)
-        correct = torch.eq(topk, text_to_image_map.unsqueeze(-1)).any(dim=1)
+    #     # Correct iff one of the top_k values equals the correct image (as given by text_to_image_map)
+    #     correct = torch.eq(topk, text_to_image_map.unsqueeze(-1)).any(dim=1)
 
-        num_correct = correct.sum().item()
-        text_to_image_recall.append(num_correct / num_text * 100)
+    #     num_correct = correct.sum().item()
+    #     text_to_image_recall.append(num_correct / num_text * 100)
 
-    meanR_t2i, medR_t2i, mAP_t2i = calculate_metrics(inds, text_to_image_map, 1)
+    # meanR_t2i, medR_t2i, mAP_t2i = calculate_metrics(inds, text_to_image_map, 1)
 
     # image-to-text recall
     print("Image-to-text recall...")
@@ -226,33 +225,31 @@ def evalrank(image_embeddings, text_embeddings, text_to_image_map, image_to_text
         #  For each image, check whether one of the 5 relevant captions was retrieved
         # Check if image matches its ith caption (for i=0..4)
         for i in range(captions_per_image):
-            contains_index = torch.eq(topk, image_to_text_map[:, i].unsqueeze(-1)).any(
-                dim=1
-            )
+            contains_index = torch.eq(topk, image_to_text_map[:, i].unsqueeze(-1)).any(dim=1)
             correct = torch.logical_or(correct, contains_index)
 
         num_correct = correct.sum().item()
         image_to_text_recall.append(num_correct / num_im * 100)  #
 
-    meanR_i2t, medR_i2t, mAP_i2t = calculate_metrics(inds, image_to_text_map, 5)
+    meanR_i2t, medR_i2t, mAP_i2t = calculate_metrics(inds, image_to_text_map, captions_per_image)
 
     print("Done.")
     metrics = {
-        f"{kwd}/image_to_text_recall_1": image_to_text_recall[0],
-        f"{kwd}/image_to_text_recall_5": image_to_text_recall[1],
-        f"{kwd}/image_to_text_recall_10": image_to_text_recall[2],
-        f"{kwd}/meanR_i2t": meanR_i2t,
-        f"{kwd}/medR_i2t": medR_i2t,
-        f"{kwd}/mAP_i2t": mAP_i2t,
-        f"{kwd}/text_to_image_recall_1": text_to_image_recall[0],
-        f"{kwd}/text_to_image_recall_5": text_to_image_recall[1],
-        f"{kwd}/text_to_image_recall_10": text_to_image_recall[2],
-        f"{kwd}/meanR_t2i": meanR_t2i,
-        f"{kwd}/medR_t2i": medR_t2i,
-        f"{kwd}/mAP_t2i": mAP_t2i,
-        f"{kwd}/text_to_image_rsum": sum(text_to_image_recall),
-        f"{kwd}/image_to_text_rsum": sum(image_to_text_recall),
-        f"{kwd}/r_sum": sum(text_to_image_recall) + sum(image_to_text_recall),
+        f"{kwd}/i2t_R1": image_to_text_recall[0],
+        f"{kwd}/i2t_R5": image_to_text_recall[1],
+        f"{kwd}/i2t_R10": image_to_text_recall[2],
+        f"{kwd}/i2t_meanR": meanR_i2t,
+        f"{kwd}/i2t_medR": medR_i2t,
+        f"{kwd}/i2t_mAP": mAP_i2t,
+        # f"{kwd}/text_to_image_recall_1": text_to_image_recall[0],
+        # f"{kwd}/text_to_image_recall_5": text_to_image_recall[1],
+        # f"{kwd}/text_to_image_recall_10": text_to_image_recall[2],
+        # f"{kwd}/meanR_t2i": meanR_t2i,
+        # f"{kwd}/medR_t2i": medR_t2i,
+        # f"{kwd}/mAP_t2i": mAP_t2i,
+        # f"{kwd}/text_to_image_rsum": sum(text_to_image_recall),
+        f"{kwd}/i2t_rsum": sum(image_to_text_recall),
+        # f"{kwd}/r_sum": sum(text_to_image_recall) + sum(image_to_text_recall),
     }
 
     print(f"#####################{kwd}#########################")
