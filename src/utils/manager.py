@@ -99,9 +99,11 @@ class EmbeddingManager:
             for _, sample_id in enumerate(
                 self.sample_ids_list[chunk_idx : chunk_idx + self.chunk_size]
             ):
-                # embeddings[sample_id] = torch.randn(self.embedding_dim) # normally distributed random embeddings
+                embeddings[sample_id] = torch.randn(
+                    self.embedding_dim
+                )  # normally distributed random embeddings
                 # embeddings[sample_id] = torch.exp(torch.randn(self.embedding_dim) * std_dev + mean) # exponentially distributed random embeddings
-                embeddings[sample_id] = torch.zeros(self.embedding_dim)  # zero embeddings
+                # embeddings[sample_id] = torch.zeros(self.embedding_dim)  # zero embeddings
                 self.index_mapping[sample_id] = (chunk_file, sample_id)
                 self.embedding_references[sample_id] = sample_id
 
@@ -167,7 +169,9 @@ class EmbeddingManager:
         chunk_size = self.chunk_size
         for i in range(0, len(sample_ids), chunk_size):
             self.update_chunk_embeddings(
-                i // chunk_size, sample_ids[i : i + chunk_size], new_embeddings[i : i + chunk_size]
+                i // chunk_size,
+                sample_ids[i : i + chunk_size],
+                new_embeddings[i : i + chunk_size],
             )
 
     def save_embeddings_to_new_folder(self, new_embeddings_dir):

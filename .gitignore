@@ -159,3 +159,4 @@ data/
 configs/*.yaml
 
 wandb/
+plot/

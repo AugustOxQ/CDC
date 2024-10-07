@@ -1,13 +1,10 @@
 import json
 import os
 
-import h5py
 import torch
-from datasets import config, load_dataset
+from datasets import config
 from PIL import Image, ImageFile
-from torch import nn
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
+from torch.utils.data import Dataset
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True  # To handle truncated (corrupted) images
 
@@ -16,7 +13,31 @@ config.HF_DATASETS_CACHE = custom_download_path
 
 
 class FeatureExtractionDataset(Dataset):
-    def __init__(self, annotation_path, image_path, processor, ratio=0.1):
+    def __init__(self, annotation_path: str, image_path: str, processor, ratio=0.1) -> None:
+        """Initialize the FeatureExtractionDataset class.
+
+        Parameters
+        ----------
+        annotation_path : str
+            Path to the annotation file
+        image_path : str
+            Path to the image directory
+        processor : object
+            A processor object for processing the images
+        ratio : float, optional
+            The ratio of samples to use from the annotation file, by default 0.1
+
+        Attributes
+        ----------
+        annotations : list
+            The list of annotations
+        image_path : str
+            The path to the image directory
+        processor : object
+            The processor object for processing the images
+        sample_ids : dict
+            A dictionary mapping sample IDs to their indices in the annotations list
+        """
         self.annotations = json.load(open(annotation_path))
         self.annotations = self.annotations[: int(len(self.annotations) * ratio)]
         self.image_path = image_path
@@ -28,7 +49,7 @@ class FeatureExtractionDataset(Dataset):
     def __len__(self):
         return len(self.annotations)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> tuple:
         annotation = self.annotations[idx]
         img_path = os.path.join(self.image_path, annotation["image"])
         raw_image = Image.open(img_path).convert("RGB")
@@ -49,7 +70,48 @@ class FeatureExtractionDataset(Dataset):
 
 
 class CDC_train_preextract(Dataset):
-    def __init__(self, annotation_path, image_path, embedding_manager, feature_manager, ratio=0.1):
+    def __init__(
+        self,
+        annotation_path: str,
+        image_path: str,
+        embedding_manager,
+        feature_manager,
+        ratio=0.1,
+    ) -> None:
+        """Initialize the CDC_train_preextract class.
+
+        Parameters
+        ----------
+        annotation_path : str
+            Path to the annotation file
+        image_path : str
+            Path to the image directory
+        embedding_manager : object
+            An EmbeddingManager object for managing the embeddings
+        feature_manager : object
+            A FeatureManager object for managing the features
+        ratio : float, optional
+            The ratio of samples to use from the annotation file, by default 0.1
+
+        Attributes
+        ----------
+        annotations : list
+            The list of annotations
+        image_path : str
+            The path to the image directory
+        embedding_manager : object
+            The EmbeddingManager object for managing the embeddings
+        feature_manager : object
+            The FeatureManager object for managing the features
+        chunk_size : int
+            The size of each chunk
+        chunk_files : list
+            A list of chunk file names
+        chunk_data : dict
+            A dictionary mapping chunk IDs to their data
+        current_chunk : int
+            The current chunk ID
+        """
         self.annotations = json.load(open(annotation_path))
         self.annotations = self.annotations[: int(len(self.annotations) * ratio)]
         self.image_path = image_path
@@ -68,10 +130,10 @@ class CDC_train_preextract(Dataset):
     def __len__(self):
         return len(self.chunk_files)
 
-    def get_len(self):
+    def get_len(self) -> int:
         return len(self.annotations)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> tuple:
         chunk_id = idx
         if self.current_chunk != chunk_id:
             self.current_chunk = chunk_id
@@ -107,6 +169,30 @@ class CDC_train_preextract(Dataset):
 
 class CDC_test(Dataset):
     def __init__(self, annotation_path, image_path, processor, ratio=0.1):
+        """Initialize the CDC_test class.
+
+        Parameters
+        ----------
+        annotation_path : str
+            Path to the annotation file
+        image_path : str
+            Path to the image directory
+        processor : object
+            A processor object for processing the images
+        ratio : float, optional
+            The ratio of samples to use from the annotation file, by default 0.1
+
+        Attributes
+        ----------
+        annotations : list
+            The list of annotations
+        image_path : str
+            The path to the image directory
+        processor : object
+            The processor object for processing the images
+        captions_per_image : int
+            The number of captions per image, either 1 or 5
+        """
         self.annotations = json.load(open(annotation_path))[:1000]
         self.annotations = self.annotations[: int(len(self.annotations) * ratio)]
         self.image_path = image_path
@@ -134,19 +220,18 @@ class CDC_test(Dataset):
         return image_input, raw_text
 
 
-def test():
-    from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer, CLIPModel
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
-    # model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-    # preprocess = AutoImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
-    # tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+def testdataset():
+    # from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer, CLIPModel
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # print(f"Using device: {device}")
+    # # model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+    # # preprocess = AutoImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    # # tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+    ...
 
 
 def main():
-    test()
+    testdataset()
 
 
 if __name__ == "__main__":

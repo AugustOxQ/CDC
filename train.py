@@ -28,6 +28,7 @@ from src.utils import (
     FolderManager,
     calculate_n_clusters,
     plot_umap,
+    plot_umap_nooutlier,
 )
 from src.utils.inference import (
     extract_and_store_features,
@@ -77,7 +78,8 @@ def train(cfg: DictConfig, **kwargs):
         label_embedding_cp = label_embedding.clone().detach()
 
         # Initialize optimizer for label_embedding
-        current_lr = optimizer.param_groups[0]["lr"]
+        # current_lr = optimizer.param_groups[0]["lr"] * 100
+        current_lr = 1e-1
         optimizer_label = torch.optim.AdamW(
             [label_embedding],
             lr=current_lr,
@@ -92,7 +94,8 @@ def train(cfg: DictConfig, **kwargs):
         )  # Sample new label embeddings
         comb_emb_neg = model.combine(txt_emb, txt_full, label_embedding_neg)
 
-        loss = criteria(img_emb, comb_emb, comb_emb_neg)
+        loss_dict = criteria(img_emb, comb_emb, comb_emb_neg)
+        loss = loss_dict["total_loss"]
         epoch_metrics["loss"] += loss.item()
         optimizer.zero_grad()
         if update_label_embedding:
@@ -124,6 +127,8 @@ def train(cfg: DictConfig, **kwargs):
             {
                 "train/epoch": epoch,
                 "train/total_loss": loss.item(),
+                "train/comb_contrastive_loss": loss_dict["cosine_loss"].item(),
+                "train/label_contrastive_loss": loss_dict["contrastive_loss"].item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
                 "train/dynamic_scalar": model.combiner.get_newest(),
             },
@@ -150,7 +155,7 @@ def run(cfg: DictConfig, **kwargs):
     model = CDC(
         clip_trainable=False,
         d_model=cfg.model.d_model,
-        nhead=cfg.model.nhead,
+        nhead=cfg.model.num_heads,
         num_layers=cfg.model.num_layers,
     ).to(device)
     # preprocess = AutoImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
@@ -243,7 +248,7 @@ def run(cfg: DictConfig, **kwargs):
     )
 
     # Setup criteria and optimizer and scheduler
-    criteria = LabelContrastiveLoss()
+    criteria = LabelContrastiveLoss(margin=0.1, reg_weight=1, return_dict=True)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=cfg.train.lr,
@@ -355,8 +360,10 @@ def run(cfg: DictConfig, **kwargs):
                 print("##########Performing UMAP##########")
                 umap_features = clustering.get_umap(label_embedding)
 
-                print("##########Performing KMeans##########")
-                umap_labels, _ = clustering.get_kmeans(umap_features, n_clusters=n_clusters)
+                print("##########Performing Clustering##########")
+                umap_labels, umap_centers = clustering.get_hdbscan(
+                    umap_features, n_clusters=n_clusters
+                )
 
                 if cfg.control.save:
                     # Plot UMAP before clustering update
@@ -370,9 +377,21 @@ def run(cfg: DictConfig, **kwargs):
                         samples_to_track,
                     )
 
+                    plot_umap_nooutlier(
+                        umap_features_np,
+                        umap_labels_np,
+                        plot_dir,
+                        epoch,
+                        samples_to_track,
+                    )
+
                 print("##########Performing clustering update##########")
                 # Map clustering results back to the original embeddings
-                updated_embeddings = clustering.kmeans_update(
+                if epoch < k_means_middle_epoch:
+                    update_noise = "ignore"
+                else:
+                    update_noise = "assign"
+                updated_embeddings = clustering.hdbscan_update(
                     umap_labels=umap_labels,
                     original_embeddings=label_embedding,
                     update_type="hard",
@@ -380,6 +399,7 @@ def run(cfg: DictConfig, **kwargs):
                     repulsion_factor=0.1,
                     random_repulsion=False,
                     threshold_k=first_stage_n,
+                    update_noise=update_noise,
                 )
 
                 # Find unique embeddings
@@ -412,24 +432,24 @@ def run(cfg: DictConfig, **kwargs):
                 # num_different_rows = torch.sum(differences).item()
                 # assert num_different_rows == 0, f"Embeddings have not been updated after clustering, {num_different_rows} rows are different"
 
-                if cfg.control.save:
-                    # Calculate the updated UMAP and KMeans clustering
-                    umap_features_updated = clustering.get_umap(updated_embeddings)
-                    umap_labels_updated, _ = clustering.get_kmeans(
-                        umap_features_updated, n_clusters=n_clusters
-                    )
+                # if cfg.control.save:
+                #     # Calculate the updated UMAP and KMeans clustering
+                #     umap_features_updated = umap_centers
+                #     umap_labels_updated = torch.arange(len(umap_features_updated))
 
-                    umap_features_np_updated = umap_features_updated.cpu().numpy()
-                    umap_labels_np_updated = umap_labels_updated.cpu().numpy()
+                #     # Plot UMAP after clustering update
 
-                    # Plot UMAP after clustering update
-                    plot_umap(
-                        umap_features_np_updated,
-                        umap_labels_np_updated,
-                        plot_dir,
-                        f"{epoch}_kmupdate",
-                        samples_to_track,
-                    )
+                #     umap_features_np_updated = umap_features_updated.cpu().numpy()
+                #     umap_labels_np_updated = umap_labels_updated.cpu().numpy()
+
+                #     # Plot UMAP after clustering update
+                #     plot_umap(
+                #         umap_features_np_updated,
+                #         umap_labels_np_updated,
+                #         plot_dir,
+                #         f"{epoch}_kmupdate",
+                #         [],
+                #     )
 
             elif epoch >= k_means_middle_epoch:
                 print("##########No clustering##########")

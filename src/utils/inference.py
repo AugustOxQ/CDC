@@ -22,6 +22,19 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def random_sample_with_replacement(label_embedding):
+    """Randomly sample label embeddings with replacement.
+
+    The function takes a tensor of label embeddings and returns a tensor of the same shape
+    where each element is randomly sampled from the input tensor with replacement. The
+    function ensures that the sampled index is not the same as the original index.
+
+    Args:
+        label_embedding (Tensor): Tensor of label embeddings. Shape (n_labels, embedding_dim).
+
+    Returns:
+        sampled_label_embedding (Tensor): Tensor of sampled label embeddings. Shape (n_labels, embedding_dim).
+    """
+
     size = label_embedding.size(0)
     random_indices = torch.randint(0, size, (size,))
 
@@ -108,7 +121,14 @@ def compute_recall_at_k(similarities, k):
 
 
 def extract_and_store_features(
-    annotation_path, image_path, feature_manager, batch_size, model, processor, device, ratio=0.1
+    annotation_path,
+    image_path,
+    feature_manager,
+    batch_size,
+    model,
+    processor,
+    device,
+    ratio=0.1,
 ):
     dataset = FeatureExtractionDataset(annotation_path, image_path, processor, ratio=ratio)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=8)
@@ -171,7 +191,7 @@ def inference_train(model, dataloader, device, epoch=0, Ks=[1, 5, 10], max_batch
             label_embedding = label_embedding.to(device)
 
             # Shuffle label embeddings
-            label_embedding_shuffled = sample_label_embeddings(label_embedding)
+            label_embedding_shuffled = replace_with_most_different(label_embedding)
 
             # Combine embeddings
             comb_emb = model.combine(txt_emb_cls, txt_emb, label_embedding)
@@ -195,8 +215,8 @@ def inference_train(model, dataloader, device, epoch=0, Ks=[1, 5, 10], max_batch
                 img_emb.cpu().numpy(), comb_emb_shuffled.cpu().numpy()
             ).diagonal()
 
-            # Test 1: Whether cosine_sim_comb is greater than cosine_sim_raw
-            comparison_raw = cosine_sim_comb > cosine_sim_raw
+            # Test 1: Whether cosine_sim_comb is equal or greater than cosine_sim_raw
+            comparison_raw = cosine_sim_comb >= cosine_sim_raw
             raw_better_count = np.sum(comparison_raw)
             total_raw_better_count += raw_better_count
 
@@ -414,7 +434,8 @@ def oracle_test_itt(
             # Compute cosine similarity between the image and all text-label combinations
             for label_idx in range(num_labels):
                 combined_sims[label_idx * num_texts : (label_idx + 1) * num_texts] = torch.mm(
-                    img_emb[img_id : img_id + 1], combined_txt_label_emb[:, label_idx, :].T
+                    img_emb[img_id : img_id + 1],
+                    combined_txt_label_emb[:, label_idx, :].T,
                 ).flatten()
 
             # Rank the correct text embeddings for each label embedding
@@ -542,7 +563,13 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
     print("Oracle test: text-to-image")
     start_time = time.time()
     best_label_indices, worst_label_idx = oracle_test_tti(
-        model, label_embeddings, all_img_emb, all_txt_emb, all_txt_full, text_to_image_map, device
+        model,
+        label_embeddings,
+        all_img_emb,
+        all_txt_emb,
+        all_txt_full,
+        text_to_image_map,
+        device,
     )
     end_time = time.time()
     print(f"Oracle test time: {end_time - start_time}")

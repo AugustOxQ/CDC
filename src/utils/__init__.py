@@ -10,4 +10,4 @@ from src.utils.inference import (
     sample_label_embeddings,
 )
 from src.utils.manager import EmbeddingManager, FeatureManager, FolderManager
-from src.utils.tools import calculate_n_clusters, plot_umap
+from src.utils.tools import calculate_n_clusters, plot_umap, plot_umap_nooutlier

@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.init
 from transformers import CLIPModel
 
-from .components.combiner_network import Combiner
+from .components.combiner_network import Combiner_basic, Combiner_transformer
 
 
 def get_clip(trainable=False):
@@ -19,34 +19,16 @@ def get_clip(trainable=False):
     return model
 
 
-def l2norm(x):
-    """L2-normalize columns of x."""
-    norm = torch.pow(x, 2).sum(dim=-1, keepdim=True).sqrt()
-    return torch.div(x, norm)
-
-
-class TransformerEncoder(nn.Module):
-    """Transformer encoder module as used in BERT, etc.
-
-    Used for encoding extra text features.
-    """
-
-    def __init__(self, d_model=512, nhead=8, num_layers=4):
-        super().__init__()
-        encoder_layers = nn.TransformerEncoderLayer(d_model, nhead)
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layers, num_layers, enable_nested_tensor=False
-        )
-
-    def forward(self, src, mask=None):
-        output = self.transformer_encoder(src, mask)
-        return output
-
-
 class CDC(nn.Module):
     """CLIP-based Deep Clustering (CDC) module."""
 
-    def __init__(self, clip_trainable=False, d_model=512, nhead=8, num_layers=2):
+    def __init__(
+        self,
+        clip_trainable: bool = False,
+        d_model: int = 512,
+        nhead: int = 8,
+        num_layers: int = 2,
+    ) -> None:
         super().__init__()
         # Frozen CLIP as feature extractor
         self.clip = get_clip(clip_trainable)
@@ -63,7 +45,9 @@ class CDC(nn.Module):
         self.label_encoder = nn.Identity()
 
         # Combiner network to combine text and label features
-        self.combiner = Combiner(512, 512, d_model, num_heads=nhead, num_layers=num_layers)
+        self.combiner = Combiner_transformer(
+            512, 512, d_model, num_heads=nhead, num_layers=num_layers
+        )
 
     def encode_img(self, images):
         # Extract image features

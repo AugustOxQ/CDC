@@ -2,6 +2,7 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import stats
 
 
 def calculate_n_clusters2(
@@ -95,16 +96,35 @@ def calculate_n_clusters(
 def plot_umap(umap_features_np, umap_labels, plot_dir, epoch, samples_to_track=[]):
     # Plot UMAP before clustering update
     fig = plt.figure(figsize=(16, 16))
-    plt.scatter(umap_features_np[:, 0], umap_features_np[:, 1], c=umap_labels, s=0.1)
+    tmp_labels = umap_labels >= 0
+
+    plt.scatter(
+        umap_features_np[~tmp_labels, 0],
+        umap_features_np[~tmp_labels, 1],
+        c=[0.5, 0.5, 0.5],
+        s=0.1,
+        alpha=0.5,
+    )
+
+    plt.scatter(
+        umap_features_np[tmp_labels, 0],
+        umap_features_np[tmp_labels, 1],
+        c=umap_labels[tmp_labels],
+        s=0.1,
+        alpha=0.5,
+    )
 
     # Highlight and annotate the tracked samples
-    for sample_idx in samples_to_track:
-        x, y = umap_features_np[sample_idx, :]
-        plt.scatter(x, y, c="red", s=150, edgecolors="k")  # Highlight the sample
-        plt.text(x, y, f"Sample {sample_idx}", fontsize=24, color="black")  # Annotate the sample
+    if len(samples_to_track) > 0:
+        for sample_idx in samples_to_track:
+            x, y = umap_features_np[sample_idx, :]
+            plt.scatter(x, y, c="red", s=150, edgecolors="k")  # Highlight the sample
+            plt.text(
+                x, y, f"Sample {sample_idx}", fontsize=24, color="black"
+            )  # Annotate the sample
 
     # Add the number of umap_labels to the plot as title
-    plt.title(f"UMAP with {len(umap_labels)} clusters")
+    plt.title(f"UMAP clusters at epoch {epoch}")
 
     plt.colorbar()
     # output the figure
@@ -112,5 +132,68 @@ def plot_umap(umap_features_np, umap_labels, plot_dir, epoch, samples_to_track=[
     plt.close(fig)
 
 
+def plot_umap_nooutlier(
+    umap_features_np, umap_labels, plot_dir, epoch, samples_to_track=[], z_threshold=3
+):
+    # Compute the z-scores of the features for each dimension
+    z_scores = np.abs(stats.zscore(umap_features_np, axis=0))
+
+    # Filter the points by applying a z-score threshold (default = 3)
+    non_outliers = (z_scores < z_threshold).all(axis=1)
+
+    # Apply the outlier filter
+    filtered_features = umap_features_np[non_outliers]
+    filtered_labels = umap_labels[non_outliers]
+
+    # Plot UMAP without outliers
+    fig = plt.figure(figsize=(16, 16))
+    tmp_labels = filtered_labels >= 0
+
+    plt.scatter(
+        filtered_features[~tmp_labels, 0],
+        filtered_features[~tmp_labels, 1],
+        c=[0.5, 0.5, 0.5],
+        s=0.1,
+        alpha=0.5,
+    )
+
+    plt.scatter(
+        filtered_features[tmp_labels, 0],
+        filtered_features[tmp_labels, 1],
+        c=filtered_labels[tmp_labels],
+        s=0.1,
+        alpha=0.5,
+    )
+
+    # Highlight and annotate the tracked samples (if they are not outliers)
+    if len(samples_to_track) > 0:
+        for sample_idx in samples_to_track:
+            if non_outliers[sample_idx]:  # Only track samples that are not outliers
+                x, y = umap_features_np[sample_idx, :]
+                plt.scatter(x, y, c="red", s=150, edgecolors="k")  # Highlight the sample
+                plt.text(
+                    x, y, f"Sample {sample_idx}", fontsize=24, color="black"
+                )  # Annotate the sample
+
+    # Add the number of UMAP labels to the plot as title
+    plt.title(f"UMAP clusters at epoch {epoch} (outliers removed)")
+
+    plt.colorbar()
+
+    # output the figure
+    plt.savefig(os.path.join(plot_dir, f"umap_{epoch}_nooutlier.png"))
+    plt.close(fig)
+
+
 def main():
-    n_clusters_list = calculate_n_clusters(1000, 2000, 50, 50)
+    import torch
+
+    umap_features_np = np.random.rand(10000, 2)
+    umap_labels = torch.tensor([0] * 5000 + [1] * 5000, device="cpu")
+    print(umap_labels.shape)
+
+    plot_umap(umap_features_np, umap_labels, plot_dir="tmp", epoch=0)
+
+
+if __name__ == "__main__":
+    main()

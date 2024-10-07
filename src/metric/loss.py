@@ -10,7 +10,17 @@ from torch import Tensor, nn
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def norm_features(image_features, text_features):
+def norm_features(image_features: Tensor, text_features: Tensor) -> Tuple[Tensor, Tensor]:
+    """Normalize image and text features to unit length.
+
+    Args:
+        image_features: Tensor of shape (batch_size, image_feature_dim)
+        text_features: Tensor of shape (batch_size, text_feature_dim)
+
+    Returns:
+        image_features: Normalized image features. Same shape as input.
+        text_features: Normalized text features. Same shape as input.
+    """
     norm = torch.norm(image_features, dim=-1, p=2, keepdim=True)
     image_features = torch.div(image_features, norm)
     norm = torch.norm(text_features, dim=-1, p=2, keepdim=True)
@@ -19,8 +29,32 @@ def norm_features(image_features, text_features):
     return image_features, text_features
 
 
+def cross_entropy(preds: Tensor, targets: Tensor, reduction: str = "none") -> torch.Tensor:
+    """Computes the cross entropy loss between the input predictions and targets.
+
+    Args:
+        preds: The input predictions. A tensor of shape (batch_size, num_classes).
+        targets: The target labels. A tensor of shape (batch_size, num_classes).
+        reduction: The reduction to apply to the loss. One of "none" or "mean". Defaults to "none".
+
+    Returns:
+        The computed loss. A tensor of shape (batch_size,) if reduction is "none", otherwise a scalar.
+    """
+    log_softmax = nn.LogSoftmax(dim=-1)
+    loss = (-targets * log_softmax(preds)).sum(1)
+    if reduction == "mean":
+        return loss.mean()
+    else:
+        return loss
+
+
 class ContrastiveLoss(nn.Module):
     def __init__(self, margin: float = 1.0) -> None:
+        """Initialize ContrastiveLoss module.
+
+        Args:
+            margin: Margin value for contrastive loss. Defaults to 1.0.
+        """
         super().__init__()
         print("Using ContrastiveLoss")
         self.margin = margin
@@ -30,7 +64,7 @@ class ContrastiveLoss(nn.Module):
         image_features: Tensor,
         text_features: Tensor,
         device: torch.device = device,
-    ):
+    ) -> Tensor:
         labels_matrix = torch.eye(image_features.size(0)).to(device)
         label = 1 - labels_matrix
 
@@ -41,41 +75,13 @@ class ContrastiveLoss(nn.Module):
         return loss.mean()
 
 
-def cross_entropy(preds, targets, reduction="none") -> torch.Tensor:
-    log_softmax = nn.LogSoftmax(dim=-1)
-    loss = (-targets * log_softmax(preds)).sum(1)
-    if reduction == "none":
-        return loss
-    elif reduction == "mean":
-        return loss.mean()
-
-
-class ClipLoss(nn.Module):
-    def __init__(self, margin: float = 0.1) -> None:
-        super().__init__()
-        print("Using ClipLoss")
-        self.temperature = torch.ones([]) * (1 / 0.07)
-
-    def forward(
-        self,
-        image_features: Tensor,
-        text_features: Tensor,
-        device: torch.device = device,
-    ):
-        image_features, text_features = norm_features(image_features, text_features)
-
-        logits = image_features @ text_features.T * self.temperature
-        sim = image_features @ text_features.T
-        targets = F.softmax(sim + sim.t() / 2 * self.temperature, dim=-1)
-        image_loss = cross_entropy(logits, targets, reduction="none")
-        text_loss = cross_entropy(logits.t(), targets.t(), reduction="none")
-        loss = (image_loss + text_loss) / 2.0
-
-        return loss.mean()
-
-
 class CosineLoss(nn.Module):
     def __init__(self, margin: float = 0.1) -> None:
+        """Initialize CosineLoss module.
+
+        Args:
+            margin: Margin value for cosine embedding loss. Defaults to 0.1.
+        """
         super().__init__()
         print("Using CosineLoss")
         self.margin = margin
@@ -86,7 +92,7 @@ class CosineLoss(nn.Module):
         image_features: Tensor,
         combined_features: Tensor,
         device: torch.device = device,
-    ):
+    ) -> Tensor:
         target = torch.ones(image_features.size(0)).to(device)
         output = self.loss(image_features, combined_features, target)
 
@@ -94,19 +100,32 @@ class CosineLoss(nn.Module):
 
 
 class LabelContrastiveLoss(nn.Module):
-    def __init__(self, margin: float = 0.1) -> None:
+    def __init__(
+        self, margin: float = 0.1, reg_weight: float = 1, return_dict: bool = False
+    ) -> None:
+        """Initialize Combined Cosine and Contrastive Loss module. Cosine Loss will be used to
+        contrast combined features and image features. Contrastive Loss will be used to contrast
+        positive label and negative label.
+
+        Args:
+            margin: Margin value for cosine embedding loss. Defaults to 0.1.
+            reg_weight: Weight for regularizer loss. Defaults to 1.
+            return_dict: Return loss dictionary or not. Defaults to False.
+        """
         super().__init__()
         print("Using Combined Cosine and Contrastive Loss")
         self.margin = margin
         self.cosine_similarity = nn.CosineSimilarity(dim=1)
         self.cosine_loss = nn.CosineEmbeddingLoss(margin=margin)
+        self.reg_weight = reg_weight
+        self.return_dict = return_dict
         # TODO Add diversity loss to encourage more diversity in the embeddings
 
     def forward(
         self,
         image_features: Tensor,
         combined_features: Tensor,
-        combined_features_neg: Tensor,
+        combined_features_neg: Optional[Tensor] = None,
         device: torch.device = device,
     ):
         # Batch size
@@ -134,102 +153,23 @@ class LabelContrastiveLoss(nn.Module):
             contrastive_loss = positive_loss + negative_loss
 
         # Total loss = cosine loss + contrastive loss (if applicable)
-        total_loss = cosine_loss + contrastive_loss
-
-        return total_loss
-
-
-class CosineLossR(nn.Module):
-    def __init__(
-        self, margin: float = 0.1, reg_threshold: float = 0.3, reg_weight: float = 0.1
-    ) -> None:
-        super().__init__()
-        print("Using CosineLoss with regularizer")
-        self.margin = margin
-        self.loss = nn.CosineEmbeddingLoss(margin=margin)
-        self.reg_threshold = reg_threshold  # Cosine similarity threshold for regularizer
-        self.reg_weight = reg_weight  # Weight for regularizer loss
-
-    def forward(
-        self,
-        image_features: Tensor,
-        text_features: Tensor,
-        comb_features: Tensor,
-        device: torch.device,
-    ):
-        # Step 1: Cosine loss between image_features and comb_features (improved text features)
-        target = torch.ones(image_features.size(0)).to(device)
-        cosine_loss = self.loss(image_features, comb_features, target)
-
-        # Step 2: Regularizer based on similarity between image_features and original text_features
-        cosine_sim = F.cosine_similarity(image_features, text_features, dim=-1)
-
-        # If cosine similarity is higher than threshold, the regularizer is low; otherwise, it's high
-        regularizer = torch.where(
-            cosine_sim > self.reg_threshold,
-            torch.zeros_like(cosine_sim),  # No penalty if similarity is high
-            self.reg_weight * (1 - cosine_sim),  # Penalize if similarity is low
-        )
-
-        # Step 3: Combine the cosine loss and regularizer loss
-        total_loss = cosine_loss + regularizer.mean()  # Mean regularizer loss
-
-        return total_loss
-
-
-class DiversityLoss(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        print("Using DiversityLoss")
-        self.loss = nn.CrossEntropyLoss()
-
-    def forward(
-        self,
-        image_features: Tensor,
-        text_features: Tensor,
-        device: torch.device = device,
-    ):
-        # image_features, text_features = norm_features(image_features, text_features)
-        output = self.loss(image_features, text_features)
-        return output
-
-
-class MeanSquareLoss(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        print("Using MeanSquareLoss")
-        self.loss = nn.MSELoss()
-
-    def forward(
-        self,
-        image_features: Tensor,
-        text_features: Tensor,
-        device: torch.device = device,
-    ):
-        # image_features, text_features = norm_features(image_features, text_features)
-        output = self.loss(image_features, text_features)
-        return output
+        total_loss = cosine_loss + self.reg_weight * contrastive_loss
+        loss_dict = {
+            "cosine_loss": cosine_loss,
+            "contrastive_loss": contrastive_loss,
+            "total_loss": total_loss,
+        }
+        if self.return_dict:
+            return loss_dict
+        else:
+            return total_loss
 
 
 # TODO: Implement a classifier that choose labels during training, for example, to do concatenation of image, text and label embeddings.
 
 
 def main():
-    cosineloss = CosineLoss()
-
-    image_features = torch.randn(128, 512)
-    text_features = torch.randn(128, 512)
-
-    loss = cosineloss(image_features, text_features, device="cpu")
-
-    print("Contrastive Loss: ")
-    print(loss)
-
-    mse_loss = MeanSquareLoss()
-    loss = mse_loss(image_features, text_features, device="cpu")
-
-    print("Mean Square Loss: ")
-    print(loss)
+    ...
 
 
 if __name__ == "__main__":
