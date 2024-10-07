@@ -94,7 +94,7 @@ def train(cfg: DictConfig, **kwargs):
         )  # Sample new label embeddings
         comb_emb_neg = model.combine(txt_emb, txt_full, label_embedding_neg)
 
-        loss_dict = criteria(img_emb, comb_emb, comb_emb_neg)
+        loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
         loss = loss_dict["total_loss"]
         epoch_metrics["loss"] += loss.item()
         optimizer.zero_grad()
@@ -127,8 +127,9 @@ def train(cfg: DictConfig, **kwargs):
             {
                 "train/epoch": epoch,
                 "train/total_loss": loss.item(),
-                "train/comb_contrastive_loss": loss_dict["cosine_loss"].item(),
-                "train/label_contrastive_loss": loss_dict["contrastive_loss"].item(),
+                "train/comb_contrastive_loss": loss_dict["comb_contrastive_loss"].item(),
+                "train/label_contrastive_loss": loss_dict["label_contrastive_loss"].item(),
+                "train/diff_contrastive_loss": loss_dict["diff_contrastive_loss"].item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
                 "train/dynamic_scalar": model.combiner.get_newest(),
             },
@@ -248,7 +249,14 @@ def run(cfg: DictConfig, **kwargs):
     )
 
     # Setup criteria and optimizer and scheduler
-    criteria = LabelContrastiveLoss(margin=0.1, reg_weight=1, return_dict=True)
+    criteria = LabelContrastiveLoss(
+        margin=0.1,
+        margin_pos=0.5,
+        margin_neg=0.1,
+        label_weight=1,
+        diff_weight=1,
+        return_dict=True,
+    )
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=cfg.train.lr,

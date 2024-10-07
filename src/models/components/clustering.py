@@ -163,7 +163,7 @@ class Clustering:
                 umap_labels[noise_indices] = torch.tensor(
                     [non_noise_labels[cluster_idx] for cluster_idx in nearest_clusters],
                     device=device,
-                )
+                ).to(device)
         elif update_noise == "ignore":
             # Do not update noise points
             pass

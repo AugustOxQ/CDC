@@ -29,6 +29,25 @@ def norm_features(image_features: Tensor, text_features: Tensor) -> Tuple[Tensor
     return image_features, text_features
 
 
+def compute_cosine_similarity(features1, features2):
+    """Compute the pairwise cosine similarity between two sets of feature vectors.
+
+    Args:
+        features1: Tensor of shape (batch_size, feature_dim)
+        features2: Tensor of shape (batch_size, feature_dim)
+    Returns:
+        Tensor of shape (batch_size, batch_size) containing pairwise cosine similarities.
+    """
+    # Normalize the feature vectors
+    features1_norm = F.normalize(features1, p=2, dim=1)
+    features2_norm = F.normalize(features2, p=2, dim=1)
+
+    # Compute the cosine similarity as the dot product of normalized features
+    cosine_sim = torch.mm(features1_norm, features2_norm.t())
+
+    return cosine_sim
+
+
 def cross_entropy(preds: Tensor, targets: Tensor, reduction: str = "none") -> torch.Tensor:
     """Computes the cross entropy loss between the input predictions and targets.
 
@@ -101,7 +120,13 @@ class CosineLoss(nn.Module):
 
 class LabelContrastiveLoss(nn.Module):
     def __init__(
-        self, margin: float = 0.1, reg_weight: float = 1, return_dict: bool = False
+        self,
+        margin: float = 0.1,
+        margin_pos: float = 0.5,
+        margin_neg: float = 0.1,
+        label_weight: float = 1.0,
+        diff_weight: float = 1.0,
+        return_dict: bool = False,
     ) -> None:
         """Initialize Combined Cosine and Contrastive Loss module. Cosine Loss will be used to
         contrast combined features and image features. Contrastive Loss will be used to contrast
@@ -109,21 +134,28 @@ class LabelContrastiveLoss(nn.Module):
 
         Args:
             margin: Margin value for cosine embedding loss. Defaults to 0.1.
-            reg_weight: Weight for regularizer loss. Defaults to 1.
+            margin_pos: Margin value for positive contrastive loss. Defaults to 0.5.
+            margin_neg: Margin value for negative contrastive loss. Defaults to 0.1.
+            label_weight: Weight for regularizer loss. Defaults to 1.
+            diff_weight: Weight for difference loss. Defaults to 1.
             return_dict: Return loss dictionary or not. Defaults to False.
         """
         super().__init__()
         print("Using Combined Cosine and Contrastive Loss")
         self.margin = margin
+        self.margin_pos = margin_pos
+        self.margin_neg = margin_neg
         self.cosine_similarity = nn.CosineSimilarity(dim=1)
         self.cosine_loss = nn.CosineEmbeddingLoss(margin=margin)
-        self.reg_weight = reg_weight
+        self.label_weight = label_weight
+        self.diff_weight = diff_weight
         self.return_dict = return_dict
         # TODO Add diversity loss to encourage more diversity in the embeddings
 
     def forward(
         self,
         image_features: Tensor,
+        text_features: Tensor,
         combined_features: Tensor,
         combined_features_neg: Optional[Tensor] = None,
         device: torch.device = device,
@@ -133,10 +165,12 @@ class LabelContrastiveLoss(nn.Module):
 
         # 1. Cosine loss between image_features and combined_features (positive pair)
         target_positive = torch.ones(batch_size).to(device)
-        cosine_loss = self.cosine_loss(image_features, combined_features, target_positive)
+        comb_contrastive_loss = self.cosine_loss(
+            image_features, combined_features, target_positive
+        )
 
         # 2. Contrastive loss with positive and negative contrast if combined_features_neg is provided
-        contrastive_loss = 0
+        label_contrastive_loss = 0
         if combined_features_neg is not None:
             # Positive contrast (diagonal should be similar)
             positive_similarity = self.cosine_similarity(image_features, combined_features)
@@ -150,15 +184,44 @@ class LabelContrastiveLoss(nn.Module):
             )
 
             # Combine both positive and negative loss for contrastive learning
-            contrastive_loss = positive_loss + negative_loss
+            label_contrastive_loss = positive_loss + negative_loss
+
+        # 3. Contrastive loss with the difference of combined_features and raw_features
+        diff_contrastive_loss = 0
+        if text_features is not None:
+            raw_sim = compute_cosine_similarity(image_features, text_features)
+            comb_sim = compute_cosine_similarity(image_features, combined_features)
+
+            diff_sim = comb_sim - raw_sim
+
+            if diff_sim.dim() != 2:
+                raise ValueError(
+                    "sim_diff should be a 2D matrix, but got a tensor with shape {}".format(
+                        diff_sim.shape
+                    )
+                )
+            # Positive loss: diagonal elements (positive pairs), we want sim_diff to be greater than margin_pos
+            pos_loss = torch.relu(self.margin_pos - diff_sim.diag()).mean()
+
+            # Negative loss: off-diagonal elements (negative pairs), we want sim_diff to be less than margin_neg
+            # We mask out the diagonal elements using torch.eye(batch_size)
+            mask = torch.eye(batch_size, dtype=torch.bool)
+            neg_loss = torch.relu(diff_sim[~mask] - self.margin_neg).mean()
+            diff_contrastive_loss = pos_loss + neg_loss
 
         # Total loss = cosine loss + contrastive loss (if applicable)
-        total_loss = cosine_loss + self.reg_weight * contrastive_loss
+        total_loss = (
+            comb_contrastive_loss
+            + self.label_weight * label_contrastive_loss
+            + self.diff_weight * diff_contrastive_loss
+        )
         loss_dict = {
-            "cosine_loss": cosine_loss,
-            "contrastive_loss": contrastive_loss,
+            "comb_contrastive_loss": comb_contrastive_loss,
+            "label_contrastive_loss": label_contrastive_loss,
+            "diff_contrastive_loss": diff_contrastive_loss,
             "total_loss": total_loss,
         }
+
         if self.return_dict:
             return loss_dict
         else:
