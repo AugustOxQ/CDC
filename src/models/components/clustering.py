@@ -154,16 +154,23 @@ class Clustering:
             print("Assigning noise points to nearest clusters")
             noise_indices = (umap_labels == -1).nonzero(as_tuple=True)[0].to(device)
             if len(noise_indices) > 0:
-                noise_embeddings = original_embeddings[noise_indices]
+                noise_embeddings = original_embeddings[noise_indices].to(device)
                 # Compute distances between noise embeddings and cluster centers
                 distances = torch.cdist(noise_embeddings, cluster_centers)
                 # Assign noise points to the nearest cluster
                 nearest_clusters = distances.argmin(dim=1)
-                # Update the labels of noise points to their assigned clusters
-                umap_labels[noise_indices] = torch.tensor(
-                    [non_noise_labels[cluster_idx] for cluster_idx in nearest_clusters],
+                # Convert nearest cluster labels to the correct device
+                assigned_labels = torch.tensor(
+                    [non_noise_labels[cluster_idx].item() for cluster_idx in nearest_clusters],
                     device=device,
-                ).to(device)
+                    dtype=umap_labels.dtype,
+                )
+
+                # Assign the labels to umap_labels
+                umap_labels[
+                    noise_indices
+                ] = assigned_labels  # Ensure umap_labels is also on the same device
+
         elif update_noise == "ignore":
             # Do not update noise points
             pass
