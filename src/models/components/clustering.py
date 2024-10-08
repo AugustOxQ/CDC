@@ -167,9 +167,9 @@ class Clustering:
                 )
 
                 # Assign the labels to umap_labels
-                umap_labels[
-                    noise_indices
-                ] = assigned_labels  # Ensure umap_labels is also on the same device
+                umap_labels[noise_indices] = assigned_labels.to(
+                    umap_labels.device
+                )  # Ensure umap_labels is also on the same device
 
         elif update_noise == "ignore":
             # Do not update noise points
