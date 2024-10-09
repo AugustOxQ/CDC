@@ -45,9 +45,7 @@ class CDC(nn.Module):
         self.label_encoder = nn.Identity()
 
         # Combiner network to combine text and label features
-        self.combiner = Combiner_transformer(
-            512, 512, d_model, num_heads=nhead, num_layers=num_layers
-        )
+        self.combiner = Combiner_basic(512, 512, d_model, num_heads=nhead, num_layers=num_layers)
 
     def encode_img(self, images):
         # Extract image features

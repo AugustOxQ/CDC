@@ -132,20 +132,20 @@ class Combiner_basic(nn.Module):
         # print(self.scalar.get())
 
         # # Option1: Output is a combination of combined_featured and text_features and label_projected_features
-        # output = (
-        #     self.output_layer(combined_features)
-        #     + dynamic_scalar * text_features
-        #     + (1 - dynamic_scalar) * label_projected_features
-        # )
+        output = (
+            self.output_layer(combined_features)
+            + dynamic_scalar * text_features
+            + (1 - dynamic_scalar) * label_projected_features
+        )
 
-        # # Option2: Output is a combination of combined_featured and text_features
+        # Option2: Output is a combination of combined_featured and text_features
         # output = (
         #     dynamic_scalar * self.output_layer(combined_features)
         #     + (1 - dynamic_scalar) * text_features
         # )
 
         # Option3: Output is combined_features
-        output = self.output_layer(combined_features) + text_features
+        # output = self.output_layer(combined_features) + text_features
 
         return F.normalize(output)
 
