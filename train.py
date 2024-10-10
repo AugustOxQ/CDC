@@ -26,7 +26,7 @@ from src.utils import (
     EmbeddingManager,
     FeatureManager,
     FolderManager,
-    calculate_n_clusters,
+    calculate_n_clusters_3,
     plot_umap,
     plot_umap_nooutlier,
 )
@@ -254,7 +254,7 @@ def run(cfg: DictConfig, **kwargs):
         margin_pos=0.5,
         margin_neg=0.1,
         label_weight=1,
-        diff_weight=1,
+        diff_weight=0.1,
         return_dict=True,
     )
     optimizer = torch.optim.AdamW(
@@ -291,7 +291,7 @@ def run(cfg: DictConfig, **kwargs):
         initial_n_clusters >= first_stage_n >= second_stage_n
     ), f"Invalid number of clusters, {initial_n_clusters}, {first_stage_n}, {second_stage_n}"
 
-    n_clusters_list = calculate_n_clusters(
+    n_clusters_list = calculate_n_clusters_3(
         initial_n_clusters,
         first_stage_n,
         second_stage_n,

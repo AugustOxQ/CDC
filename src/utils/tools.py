@@ -1,11 +1,12 @@
 import os
+import test
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
 
 
-def calculate_n_clusters2(
+def calculate_n_clusters(
     initial_n_clusters=1000,
     first_stage_n=2000,
     second_stage_n=50,
@@ -42,7 +43,7 @@ def calculate_n_clusters2(
         return n_clusters
 
 
-def calculate_n_clusters(
+def calculate_n_clusters_2(
     initial_n_clusters=3000,
     first_stage_n=200,
     second_stage_n=50,
@@ -89,6 +90,64 @@ def calculate_n_clusters(
             # Fourth stage: Final clustering
             n_clusters = second_stage_n
             n_clusters_list.append(n_clusters)
+
+    return n_clusters_list
+
+
+def calculate_n_clusters_3(
+    initial_n_clusters=3000,
+    first_stage_n=200,
+    second_stage_n=50,
+    epoch=30,
+    k_means_start_epoch=5,
+    k_means_slow_epoch=20,
+    k_means_end_epoch=25,
+    decay_rate=0.8,
+):
+    n_clusters_list = []
+
+    for epoch in range(epoch):
+        if epoch < k_means_start_epoch:
+            # First stage: no clustering
+            n_clusters_list.append(0)
+
+        elif k_means_start_epoch <= epoch < k_means_end_epoch:
+            # Second stage: Staircase-style drop every 2 epochs
+            adjusted_epoch = epoch - k_means_start_epoch
+
+            # Number of drops (every 2 epochs)
+            num_steps = (k_means_end_epoch - k_means_start_epoch) // 5
+            step_size = (initial_n_clusters - second_stage_n) / num_steps
+
+            if adjusted_epoch % 5 == 0:
+                # Drop every two epochs
+                n_clusters = initial_n_clusters - (adjusted_epoch // 5) * step_size
+            else:
+                # Stay the same on the odd epochs
+                n_clusters = initial_n_clusters - (adjusted_epoch // 5) * step_size
+
+            n_clusters_list.append(
+                int(max(n_clusters, second_stage_n))
+            )  # Ensure it's at least `first_stage_n`
+        else:
+            # Fourth stage: Final clustering
+            n_clusters = second_stage_n
+            n_clusters_list.append(n_clusters)
+
+    return n_clusters_list
+
+
+def test_calculate_n_clusters_3():
+    n_clusters_list = calculate_n_clusters_3(
+        initial_n_clusters=200,
+        first_stage_n=50,
+        second_stage_n=5,
+        epoch=30,
+        k_means_start_epoch=5,
+        k_means_slow_epoch=20,
+        k_means_end_epoch=25,
+        decay_rate=0.8,
+    )
 
     return n_clusters_list
 
@@ -185,7 +244,7 @@ def plot_umap_nooutlier(
     plt.close(fig)
 
 
-def main():
+def test_umap():
     import torch
 
     umap_features_np = np.random.rand(10000, 2)
@@ -193,6 +252,11 @@ def main():
     print(umap_labels.shape)
 
     plot_umap(umap_features_np, umap_labels, plot_dir="tmp", epoch=0)
+
+
+def main():
+    res = test_calculate_n_clusters_3()
+    print(res)
 
 
 if __name__ == "__main__":
