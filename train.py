@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import transformers
 from omegaconf import DictConfig, OmegaConf
+from sklearn.cluster import k_means
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -348,8 +349,19 @@ def run(cfg: DictConfig, **kwargs):
             logger_epoch["inference_train"] = inf_train_log
 
         if cfg.control.train_2:  # KMeans update
-            n_clusters = n_clusters_list[epoch]
-            wandb_run.log({"train_2/n_clusters": n_clusters, "train_2/epoch": epoch})
+            n_clusters = n_clusters_list[epoch]  # Number of clusters for the current epoch
+            # alpha to control the soft update
+            alpha = max(
+                0.9 * (1 - (k_means_middle_epoch - epoch) / k_means_middle_epoch),
+                0.1,
+            )
+            wandb_run.log(
+                {
+                    "train_2/epoch": epoch,
+                    "train_2/n_clusters": n_clusters,
+                    "train_2/alpha": alpha,
+                }
+            )
 
             # Perform clustering and update embeddings by merging
             if (
@@ -401,6 +413,9 @@ def run(cfg: DictConfig, **kwargs):
                 else:
                     update_noise = "assign"
                     update_type = "hard"
+
+                # An adaptive alpha which minimum 0.1 and maximum 0.9, slide depends on k_means_middle_epoch - k_means_start_epoch
+
                 updated_embeddings = clustering.hdbscan_update(
                     umap_labels=umap_labels,
                     original_embeddings=label_embedding,

@@ -170,7 +170,6 @@ class Clustering:
                 umap_labels[noise_indices] = assigned_labels.to(
                     umap_labels.device
                 )  # Ensure umap_labels is also on the same device
-
         elif update_noise == "ignore":
             # Do not update noise points
             pass
@@ -183,17 +182,10 @@ class Clustering:
             # Hard update: Replace embeddings with their corresponding cluster centers
             for label in tqdm(unique_labels):
                 cluster_indices = (umap_labels == label).nonzero(as_tuple=True)[0].to(device)
-                if label == -1:
-                    if update_noise == "assign":
-                        # Noise points have been assigned to clusters
-                        continue
-                    else:
-                        # Do not update noise points
-                        continue
                 cluster_center = cluster_centers[label_to_idx[label.item()]]
                 updated_embeddings[cluster_indices] = cluster_center
         elif update_type == "soft":
-            for label in tqdm(unique_labels):
+            for label in tqdm(non_noise_labels):
                 cluster_indices = (
                     (umap_labels == label).nonzero(as_tuple=True)[0].to(original_embeddings.device)
                 )
