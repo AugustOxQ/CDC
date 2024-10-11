@@ -121,7 +121,7 @@ class Clustering:
         umap_labels,
         original_embeddings,
         update_type="hard",
-        alpha=0.1,
+        alpha=0.5,
         repulsion_factor=0.05,
         random_repulsion=False,
         threshold_k=1000,
@@ -192,6 +192,14 @@ class Clustering:
                         continue
                 cluster_center = cluster_centers[label_to_idx[label.item()]]
                 updated_embeddings[cluster_indices] = cluster_center
+        elif update_type == "soft":
+            for label in tqdm(unique_labels):
+                cluster_indices = (
+                    (umap_labels == label).nonzero(as_tuple=True)[0].to(original_embeddings.device)
+                )
+                updated_embeddings[cluster_indices] = (1 - alpha) * original_embeddings[
+                    cluster_indices
+                ] + alpha * cluster_centers[label_to_idx[label.item()]]
         else:
             raise ValueError("update_type must be 'hard' or 'soft'.")
 

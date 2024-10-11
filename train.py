@@ -397,13 +397,15 @@ def run(cfg: DictConfig, **kwargs):
                 # Map clustering results back to the original embeddings
                 if epoch < k_means_middle_epoch:
                     update_noise = "ignore"
+                    update_type = "soft"
                 else:
                     update_noise = "assign"
+                    update_type = "hard"
                 updated_embeddings = clustering.hdbscan_update(
                     umap_labels=umap_labels,
                     original_embeddings=label_embedding,
-                    update_type="hard",
-                    alpha=0.1,
+                    update_type=update_type,
+                    alpha=0.5,
                     repulsion_factor=0.1,
                     random_repulsion=False,
                     threshold_k=first_stage_n,
@@ -468,7 +470,7 @@ def run(cfg: DictConfig, **kwargs):
                 print(f"Unique embeddings: {unique_embeddings.size(0)}")
 
         if cfg.control.test:
-            if unique_embeddings is not None and epoch >= k_means_middle_epoch:
+            if unique_embeddings is not None:  # and epoch >= k_means_middle_epoch:
                 print("##########Testing test dataset##########")
                 inf_test_log = inference_test(
                     model, processor, test_dataloader, unique_embeddings, epoch, device

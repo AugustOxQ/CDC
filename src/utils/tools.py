@@ -103,6 +103,7 @@ def calculate_n_clusters_3(
     k_means_slow_epoch=20,
     k_means_end_epoch=25,
     decay_rate=0.8,
+    interval=1,
 ):
     n_clusters_list = []
 
@@ -116,19 +117,19 @@ def calculate_n_clusters_3(
             adjusted_epoch = epoch - k_means_start_epoch
 
             # Number of drops (every 2 epochs)
-            num_steps = (k_means_end_epoch - k_means_start_epoch) // 5
+            num_steps = (k_means_end_epoch - k_means_start_epoch) // interval
             step_size = (initial_n_clusters - second_stage_n) / num_steps
 
-            if adjusted_epoch % 5 == 0:
-                # Drop every two epochs
-                n_clusters = initial_n_clusters - (adjusted_epoch // 5) * step_size
+            if adjusted_epoch % interval == 0:
+                # Drop every interval epochs
+                n_clusters = initial_n_clusters - (adjusted_epoch // interval) * step_size
             else:
                 # Stay the same on the odd epochs
-                n_clusters = initial_n_clusters - (adjusted_epoch // 5) * step_size
+                n_clusters = initial_n_clusters - (adjusted_epoch // interval) * step_size
 
             n_clusters_list.append(
                 int(max(n_clusters, second_stage_n))
-            )  # Ensure it's at least `first_stage_n`
+            )  # Ensure it's at least `second_stage_n`
         else:
             # Fourth stage: Final clustering
             n_clusters = second_stage_n
