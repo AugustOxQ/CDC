@@ -301,6 +301,7 @@ def run(cfg: DictConfig, **kwargs):
         k_means_middle_epoch,
         k_means_end_epoch,
         decay_rate=0.75,
+        interval=1,
     )
 
     # Start training
