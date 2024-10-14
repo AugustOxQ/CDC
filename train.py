@@ -408,7 +408,7 @@ def run(cfg: DictConfig, **kwargs):
 
                 print("##########Performing clustering update##########")
                 # Map clustering results back to the original embeddings
-                if epoch < k_means_middle_epoch:
+                if epoch < k_means_end_epoch - 1:
                     update_noise = "ignore"
                     update_type = "soft"
                 else:
