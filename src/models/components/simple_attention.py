@@ -109,3 +109,59 @@ class SimpleTransformer(nn.Module):
         fused_image_feature = self.output_projection(updated_image_feature)  # [batch, 512]
 
         return fused_image_feature
+
+
+class SimpleTransformer2(nn.Module):
+    def __init__(
+        self,
+        embed_dim: int = 512,
+        num_heads: int = 8,
+        hidden_dim: int = 512,
+        num_layers: int = 2,
+    ) -> None:
+        """Initialize a SimpleTransformer instance.
+
+        Args:
+            embed_dim (int): The dimensionality of the input embeddings.
+            num_heads (int): The number of attention heads in the Transformer layer.
+            hidden_dim (int): The dimensionality of the feed-forward layer in the
+                Transformer layer.
+            num_layers (int): The number of Transformer layers to use.
+        """
+        super().__init__()
+
+        # Transformer Encoder layer
+        self.transformer = nn.Transformer(
+            d_model=embed_dim,
+            nhead=num_heads,
+            num_encoder_layers=num_layers,
+            num_decoder_layers=num_layers,
+            dropout=0.5,
+            batch_first=True,
+        )
+
+        # Linear projection to reduce the dimension back to [batch, 512]
+        self.output_projection = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, cls_feature, full_feature):
+        """
+        Args:
+            cls_feature: Tensor of shape [batch, 512] (global feature)
+            full_feature: Tensor of shape [batch, 77, 512] (overall feature)
+
+        Returns:
+            Fused feature of shape [batch, 77, 512]
+        """
+        # [batch, 512] -> [batch, 1, 512]
+        cls_feature = cls_feature.unsqueeze(1)  # Add an extra dimension to make it [batch, 1, 512]
+
+        # Apply the Transformer, src = cls_feature, tgt = full_feature, the output shape is [batch, 77, 512]
+        transformer_output = self.transformer(cls_feature, full_feature)
+
+        # avg pooling to get the fused feature [batch, 512]
+        updated_image_feature = torch.mean(transformer_output, dim=1)
+
+        # Project the result back to the original embedding dimension
+        fused_image_feature = self.output_projection(updated_image_feature)  # [batch, 512]
+
+        return fused_image_feature

@@ -10,7 +10,11 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from src.models.components.simple_attention import CrossAttention, SimpleTransformer
+from src.models.components.simple_attention import (
+    CrossAttention,
+    SimpleTransformer,
+    SimpleTransformer2,
+)
 
 
 class FixedSizeQueue:
@@ -150,7 +154,168 @@ class Combiner_basic(nn.Module):
         return F.normalize(output)
 
 
+class Combiner_cross_attention(nn.Module):
+    """Combiner module using transformer for combining textual and label information."""
+
+    def __init__(
+        self,
+        clip_feature_dim: int = 512,
+        projection_dim: int = 512,
+        hidden_dim: int = 512,
+        num_heads: int = 8,
+        num_layers: int = 4,
+    ) -> None:
+        """
+        :param clip_feature_dim: CLIP input feature dimension (e.g., 512)
+        :param projection_dim: projection dimension (e.g., 512)
+        :param hidden_dim: hidden dimension (e.g., 512)
+        :param num_heads: Number of heads in multi-head attention
+        :param num_layers: Number of transformer layers
+        """
+        super().__init__()
+
+        self.batch_norm = nn.BatchNorm1d(projection_dim)
+
+        # Multi-head attention for label attending to text
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=projection_dim, num_heads=num_heads, batch_first=True
+        )
+
+        # Additional scalar dynamic weighting
+        self.dynamic_scalar = nn.Sequential(
+            nn.Linear(projection_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid(),
+        )
+
+        self.output_layer = nn.Linear(projection_dim, clip_feature_dim)
+
+        # Larger dynamic scalar means more weight on the combined features
+        self.scalar = FixedSizeQueue(10)
+
+    def print_scalar(self):
+        return self.scalar.get()
+
+    def get_newest(self):
+        return self.scalar.get_newest()
+
+    def forward(self, text_features: Tensor, text_full: Tensor, label_features: Tensor) -> Tensor:
+        """Combine the text features and label features using cross-attention.
+
+        Outputs combined features with the shape of text_full.
+        :param text_features: CLIP textual features (shape: batch, 512)
+        :param text_full: CLIP textual features with full sequence length (shape: batch, L, 512)
+        :param label_features: Label features (shape: batch, 512)
+        :return: combined textual features (shape: batch, L, 512)
+        """
+        assert (
+            len(text_full.shape) == 3
+        ), f"text_full should be of shape (batch, L, 512), instead got {text_full.shape}"
+
+        # Reshape label_features to (batch, 1, projection_dim) to act as both query and value
+        label_features = label_features.unsqueeze(1)  # shape: (batch, 1, projection_dim)
+
+        # Cross-attention: text_full attends to label_features
+        attended_label_features, _ = self.cross_attention(
+            query=text_full,  # shape: (batch, L, projection_dim) -> Query
+            key=label_features,  # shape: (batch, 1, projection_dim) -> Key
+            value=label_features,  # shape: (batch, 1, projection_dim) -> Value
+        )  # Output shape: (batch, L, projection_dim)
+
+        # Mean pool the attended label features over dim 1
+        attended_label_features = torch.mean(
+            attended_label_features, dim=1
+        )  # (batch, projection_dim)
+
+        # Dynamic scalar
+        dynamic_scalar = self.dynamic_scalar(attended_label_features)
+        self.scalar.add(dynamic_scalar.mean().item())
+
+        # Skip-connection and normalization
+        output = self.batch_norm(attended_label_features + text_features)
+
+        return output  # Return the output
+
+
+# Hook for TorchScript
 class Combiner_transformer(nn.Module):
+    """Combiner module using transformer for combining textual and label information."""
+
+    def __init__(
+        self,
+        clip_feature_dim: int = 512,
+        projection_dim: int = 512,
+        hidden_dim: int = 512,
+        num_heads: int = 8,
+        num_layers: int = 4,
+    ) -> None:
+        """
+        :param clip_feature_dim: CLIP input feature dimension (e.g., 512)
+        :param projection_dim: projection dimension (e.g., 256)
+        :param hidden_dim: hidden dimension (e.g., 512)
+        :param num_heads: Number of heads in multi-head attention
+        :param num_layers: Number of transformer layers
+        """
+        super().__init__()
+
+        self.simple_transformer = SimpleTransformer2(
+            embed_dim=projection_dim,
+            num_heads=num_heads,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+        )
+
+        self.batch_norm = nn.BatchNorm1d(projection_dim)
+
+        # Additional scalar dynamic weighting
+        self.dynamic_scalar = nn.Sequential(
+            nn.Linear(projection_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid(),
+        )
+
+        # Larger dynamic scalar means more weight on the combined features
+        self.scalar = FixedSizeQueue(10)
+
+    def print_scalar(self):
+        return self.scalar.get()
+
+    def get_newest(self):
+        return self.scalar.get_newest()
+
+    @torch.jit.export
+    def forward(self, text_features: Tensor, text_full: Tensor, label_features: Tensor) -> Tensor:
+        """Combine the text features and label features using cross-attention.
+
+        Outputs combined features.
+        :param text_features: CLIP textual features (shape: batch, 512)
+        :param text_full: CLIP textual features with full sequence length (shape: batch, L, 512)
+        :param label_features: Label features (shape: batch, 512)
+        :return: combined textual features (shape: batch, 512)
+        """
+        assert (
+            len(text_full.shape) == 3
+        ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
+
+        combined_features = self.simple_transformer(label_features, text_full)
+
+        # Dynamic scalar
+        dynamic_scalar = self.dynamic_scalar(combined_features)
+        self.scalar.add(dynamic_scalar.mean().item())
+
+        # Skip-connection and normalization
+        output = self.batch_norm(
+            dynamic_scalar * combined_features + (1 - dynamic_scalar) * text_features
+        )
+
+        return output
+
+
+class Combiner_transformer2(nn.Module):
     """Combiner module using transformer for combining textual and label information."""
 
     def __init__(
@@ -218,15 +383,13 @@ class Combiner_transformer(nn.Module):
         self.scalar.add(dynamic_scalar.mean().item())
 
         # Skip-connection and normalization
-        output = self.batch_norm(
-            dynamic_scalar * combined_features + (1 - dynamic_scalar) * text_features
-        )
+        output = self.batch_norm(combined_features + text_features)
 
         return output
 
 
 def test_forward_variables_shape_and_type():
-    combiner = Combiner_transformer()
+    combiner = Combiner_transformer2()
     text_features = torch.randn(2, 512)
     text_full = torch.randn(2, 77, 512)
     label_features = torch.randn(2, 512)

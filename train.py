@@ -54,6 +54,7 @@ def train(cfg: DictConfig, **kwargs):
     scheduler = kwargs["scheduler"]
     embedding_manager = kwargs["embedding_manager"]
     update_label_embedding = kwargs["update_label_embedding"]
+    high_lr = kwargs["high_lr"]
     log_interval = cfg.train.log_interval
     wandb_run = kwargs["wandb_run"]
 
@@ -80,7 +81,10 @@ def train(cfg: DictConfig, **kwargs):
 
         # Initialize optimizer for label_embedding
         # current_lr = optimizer.param_groups[0]["lr"] * 100
-        current_lr = 1e-1
+        if high_lr:  # high learning rate for label
+            current_lr = 1e-1
+        else:  # low learning rate for label
+            current_lr = cfg.train.lr
         optimizer_label = torch.optim.AdamW(
             [label_embedding],
             lr=current_lr,
@@ -284,6 +288,7 @@ def run(cfg: DictConfig, **kwargs):
     k_means_middle_epoch = cfg.train_2.k_means_middle_epoch  # Start slow k-means clustering
     k_means_end_epoch = cfg.train_2.k_means_end_epoch  # End k-means clustering
     update_label_embedding = True  # Update label embeddings during training
+    high_lr = True
 
     assert (
         k_means_start_epoch <= k_means_end_epoch <= max_epoch
@@ -334,6 +339,7 @@ def run(cfg: DictConfig, **kwargs):
                 optimizer=optimizer,
                 embedding_manager=embedding_manager,
                 update_label_embedding=update_label_embedding,
+                high_lr=high_lr,
                 scheduler=scheduler,
                 wandb_run=wandb_run,
             )
@@ -355,13 +361,6 @@ def run(cfg: DictConfig, **kwargs):
             alpha = max(
                 0.9 * (1 - (k_means_middle_epoch - epoch) / k_means_middle_epoch),
                 0.1,
-            )
-            wandb_run.log(
-                {
-                    "train_2/epoch": epoch,
-                    "train_2/n_clusters": n_clusters,
-                    "train_2/alpha": alpha,
-                }
             )
 
             # Perform clustering and update embeddings by merging
@@ -386,26 +385,6 @@ def run(cfg: DictConfig, **kwargs):
                     umap_features, n_clusters=n_clusters
                 )
 
-                if cfg.control.save:
-                    # Plot UMAP before clustering update
-                    umap_features_np = umap_features.cpu().numpy()
-                    umap_labels_np = umap_labels.cpu().numpy()
-                    plot_umap(
-                        umap_features_np,
-                        umap_labels_np,
-                        plot_dir,
-                        epoch,
-                        samples_to_track,
-                    )
-
-                    plot_umap_nooutlier(
-                        umap_features_np,
-                        umap_labels_np,
-                        plot_dir,
-                        epoch,
-                        samples_to_track,
-                    )
-
                 print("##########Performing clustering update##########")
                 # Map clustering results back to the original embeddings
                 if epoch < k_means_middle_epoch:
@@ -414,10 +393,11 @@ def run(cfg: DictConfig, **kwargs):
                 else:
                     update_noise = "assign"
                     update_type = "hard"
+                    high_lr = False
 
                 # An adaptive alpha which minimum 0.1 and maximum 0.9, slide depends on k_means_middle_epoch - k_means_start_epoch
 
-                updated_embeddings = clustering.hdbscan_update(
+                updated_embeddings, cluster_centers = clustering.hdbscan_update(
                     umap_labels=umap_labels,
                     original_embeddings=label_embedding,
                     update_type=update_type,
@@ -432,16 +412,14 @@ def run(cfg: DictConfig, **kwargs):
                 unique_embeddings, _ = torch.unique(updated_embeddings, return_inverse=True, dim=0)
                 print(f"Unique embeddings after clustering update: {unique_embeddings.size(0)}")
 
-                # Save unique embeddings
-                torch.save(
-                    unique_embeddings[:50],
-                    os.path.join(experiment_dir, "unique_embeddings.pt"),
-                )
+                updated_umap_features = clustering.predict_umap(updated_embeddings)
 
                 # Check how many embeddings have been updated by k-means
                 differences = torch.any(label_embedding != updated_embeddings, dim=1)
                 num_different_rows = torch.sum(differences).item()
-                print(f"Number of rows updated by K-means: {num_different_rows}")
+                print(f"Number of rows updated by Clustering: {num_different_rows}")
+
+                print(f"Number of true cluster centers after update: {cluster_centers.size(0)}")
 
                 # update the embeddings
                 embedding_manager.update_all_chunks(sample_ids, updated_embeddings)
@@ -458,24 +436,53 @@ def run(cfg: DictConfig, **kwargs):
                 # num_different_rows = torch.sum(differences).item()
                 # assert num_different_rows == 0, f"Embeddings have not been updated after clustering, {num_different_rows} rows are different"
 
-                # if cfg.control.save:
-                #     # Calculate the updated UMAP and KMeans clustering
-                #     umap_features_updated = umap_centers
-                #     umap_labels_updated = torch.arange(len(umap_features_updated))
+                if cfg.control.save:
+                    # Plot UMAP before clustering update
+                    umap_features_np = umap_features.cpu().numpy()
+                    umap_labels_np = umap_labels.cpu().numpy()
+                    updated_umap_features_np = updated_umap_features.cpu().numpy()
+                    plot_umap(
+                        umap_features_np,
+                        umap_labels_np,
+                        plot_dir,
+                        epoch,
+                        samples_to_track,
+                    )
 
-                #     # Plot UMAP after clustering update
+                    plot_umap(
+                        updated_umap_features_np,
+                        umap_labels_np,
+                        plot_dir,
+                        f"{epoch}_after_update",
+                        samples_to_track,
+                    )
 
-                #     umap_features_np_updated = umap_features_updated.cpu().numpy()
-                #     umap_labels_np_updated = umap_labels_updated.cpu().numpy()
+                    plot_umap_nooutlier(
+                        umap_features_np,
+                        umap_labels_np,
+                        plot_dir,
+                        epoch,
+                        samples_to_track,
+                    )
 
-                #     # Plot UMAP after clustering update
-                #     plot_umap(
-                #         umap_features_np_updated,
-                #         umap_labels_np_updated,
-                #         plot_dir,
-                #         f"{epoch}_kmupdate",
-                #         [],
-                #     )
+                wandb_run.log(
+                    {
+                        "train_2/epoch": epoch,
+                        "train_2/n_clusters": n_clusters,
+                        "train_2/alpha": alpha,
+                        "train_2/n_unique": unique_embeddings.size(0),
+                        "train_2/n_clusters_center": cluster_centers.size(0),
+                    }
+                )
+
+                # Save unique embeddings
+                torch.save(
+                    unique_embeddings[:50],
+                    os.path.join(experiment_dir, "unique_embeddings.pt"),
+                )
+
+                if unique_embeddings.size(0) > 50:
+                    unique_embeddings = cluster_centers
 
             elif epoch >= k_means_middle_epoch:
                 print("##########No clustering##########")

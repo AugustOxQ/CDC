@@ -21,6 +21,8 @@ class Clustering:
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.cluster = None
         self.client = None
+        self.umap_model = None
+        self.cluster_model = None
         # self.cluster_history = defaultdict(set)
 
     def initialize_cluster(self):
@@ -33,6 +35,12 @@ class Clustering:
         self.client.close()  # type: ignore
         self.cluster.close()  # type: ignore
 
+    def close_umap(self):
+        self.umap_model = None
+
+    def close_cluster_model(self):
+        self.cluster_model = None
+
     def get_umap(self, label_embedding):
         # Perform UMAP dimensionality reduction on embeddings
         self.initialize_cluster()
@@ -42,8 +50,23 @@ class Clustering:
 
         local_model = UMAP(random_state=42)
         umap_features = local_model.fit_transform(label_embedding_np)
+        self.umap_model = local_model
 
         self.close_cluster()
+
+        umap_features = torch.tensor(umap_features, device=self.device)
+        return umap_features
+
+    def predict_umap(self, label_embedding):
+        self.initialize_cluster()
+
+        label_embedding = label_embedding.to(self.device)
+        label_embedding_np = label_embedding.cpu().numpy()
+
+        umap_features = self.umap_model.transform(label_embedding_np)
+
+        self.close_cluster()
+        self.close_umap()
 
         umap_features = torch.tensor(umap_features, device=self.device)
         return umap_features
@@ -195,7 +218,7 @@ class Clustering:
         else:
             raise ValueError("update_type must be 'hard' or 'soft'.")
 
-        return updated_embeddings
+        return updated_embeddings, cluster_centers
 
 
 def test_kmeans():
@@ -265,7 +288,7 @@ def test_hdbscan():
 
     print(type(umap_labels))
 
-    updated_embeddings = clustering.hdbscan_update(
+    updated_embeddings, centers = clustering.hdbscan_update(
         umap_labels,
         label_embedding,
         update_type="hard",
@@ -278,16 +301,18 @@ def test_hdbscan():
     num_different_rows = torch.sum(differences).item()
     print(num_different_rows)
 
-    umap_features_new = clustering.get_umap(updated_embeddings)
+    umap_features_new = clustering.predict_umap(updated_embeddings)
     umap_labels_new, centers_new = clustering.get_hdbscan(umap_features_new, n_clusters=1024 - 60)
 
-    updated_embeddings_new = clustering.hdbscan_update(
+    updated_embeddings_new, centers_new = clustering.hdbscan_update(
         umap_labels_new,
         updated_embeddings,
         update_type="hard",
         alpha=0.1,
         update_noise="assign",
     )
+
+    print(f"Centers: {centers_new.shape}")
 
     # Check if embeddings have been updated
     differences = torch.any(updated_embeddings != updated_embeddings_new, dim=1)

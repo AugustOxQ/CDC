@@ -6,7 +6,12 @@ import torch.nn as nn
 import torch.nn.init
 from transformers import CLIPModel
 
-from .components.combiner_network import Combiner_basic, Combiner_transformer
+from .components.combiner_network import (
+    Combiner_basic,
+    Combiner_cross_attention,
+    Combiner_transformer,
+    Combiner_transformer2,
+)
 
 
 def get_clip(trainable=False):
@@ -45,7 +50,9 @@ class CDC(nn.Module):
         self.label_encoder = nn.Identity()
 
         # Combiner network to combine text and label features
-        self.combiner = Combiner_basic(512, 512, d_model, num_heads=nhead, num_layers=num_layers)
+        self.combiner = Combiner_cross_attention(
+            512, 512, d_model, num_heads=nhead, num_layers=num_layers
+        )
 
     def encode_img(self, images):
         # Extract image features
