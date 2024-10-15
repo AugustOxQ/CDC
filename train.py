@@ -380,7 +380,9 @@ def run(cfg: DictConfig, **kwargs):
 
                 # Perform UMAP and clustering on unique embeddings
                 print("##########Performing UMAP for computation##########")
-                umap_features_high = clustering.get_umap(label_embedding, n_components=2)
+                umap_features_high = clustering.get_umap(
+                    label_embedding, n_components=cfg.train_2.umap_components
+                )
 
                 print("##########Performing Clustering##########")
                 umap_labels, _ = clustering.get_hdbscan(umap_features_high, n_clusters=n_clusters)
