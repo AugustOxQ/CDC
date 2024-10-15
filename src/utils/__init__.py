@@ -1,4 +1,9 @@
-from src.utils.evaltools import evalrank
+from src.utils.evaltools import (
+    compute_metric_difference,
+    evalrank_all,
+    evalrank_i2t,
+    evalrank_t2i,
+)
 from src.utils.inference import (
     compute_recall_at_k,
     extract_and_store_features,

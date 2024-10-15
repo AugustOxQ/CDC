@@ -358,10 +358,7 @@ def run(cfg: DictConfig, **kwargs):
         if cfg.control.train_2:  # KMeans update
             n_clusters = n_clusters_list[epoch]  # Number of clusters for the current epoch
             # alpha to control the soft update
-            alpha = max(
-                0.9 * (1 - (k_means_middle_epoch - epoch) / k_means_middle_epoch),
-                0.1,
-            )
+            alpha = 0.9 * (1 - (k_means_middle_epoch - epoch) / k_means_middle_epoch)
 
             # Perform clustering and update embeddings by merging
             if (

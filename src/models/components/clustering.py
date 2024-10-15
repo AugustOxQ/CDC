@@ -63,7 +63,7 @@ class Clustering:
         label_embedding = label_embedding.to(self.device)
         label_embedding_np = label_embedding.cpu().numpy()
 
-        umap_features = self.umap_model.transform(label_embedding_np)
+        umap_features = self.umap_model.transform(label_embedding_np)  # type: ignore
 
         self.close_cluster()
         self.close_umap()
@@ -151,6 +151,10 @@ class Clustering:
         update_noise="ignore",  # 'ignore' or 'assign'
     ):
         device = original_embeddings.device
+
+        # clip alpha between 0.01 and 0.99
+        alpha = max(min(alpha, 0.99), 0.01)
+
         # Exclude noise points labeled as -1
         unique_labels = umap_labels.unique()
         non_noise_labels = unique_labels[unique_labels != -1]

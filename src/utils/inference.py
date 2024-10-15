@@ -2,17 +2,27 @@ import os
 import time
 import warnings
 
+import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
 import transformers
+from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics.pairwise import cosine_similarity
+from sqlalchemy import all_
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+import data
+
 # Import local packages
 from src.data.cdc_datamodule import FeatureExtractionDataset
-from src.utils import evalrank
+from src.utils import (
+    compute_metric_difference,
+    evalrank_all,
+    evalrank_i2t,
+    evalrank_t2i,
+)
 
 # Setup
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -391,7 +401,7 @@ def oracle_test_itt(
     txt_emb = txt_emb.to(device)
 
     # Precompute all combinations of text and label embeddings
-    combined_txt_label_emb = torch.zeros((num_texts, num_labels, txt_full.size(1)), device=device)
+    combined_txt_label_emb = torch.zeros((num_texts, num_labels, txt_full.size(-1)), device=device)
 
     print("Precomputing text-label embedding combinations...")
     with torch.no_grad():
@@ -492,6 +502,11 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
     all_txt_emb = []
     all_txt_full = []
 
+    metrics_best = None
+    metrics_worst = None
+    metrics_best2 = None
+    metrics_worst2 = None
+
     #  (as there are multiple pieces of text for each image)
     image_to_text_map = []
     # text_to_image_map[i] gives the corresponding image index for the ith text
@@ -553,9 +568,9 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
             torch.cuda.empty_cache()
 
     # Concate, normalize, and transform embeddings
-    all_img_emb = torch.cat(all_img_emb, axis=0)
-    all_txt_emb = torch.cat(all_txt_emb, axis=0)
-    all_txt_full = torch.cat(all_txt_full, axis=0)
+    all_img_emb = torch.cat(all_img_emb, axis=0)  # type: ignore
+    all_txt_emb = torch.cat(all_txt_emb, axis=0)  # type: ignore
+    all_txt_full = torch.cat(all_txt_full, axis=0)  # type: ignore
 
     text_to_image_map = torch.LongTensor(text_to_image_map).to(device)
     image_to_text_map = torch.LongTensor(image_to_text_map).to(device)
@@ -594,47 +609,120 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
     all_worst_comb_emb /= torch.norm(all_worst_comb_emb, dim=1, keepdim=True)
 
     # Evaluate the embeddings
-    metrics_best = evalrank(
+    metrics_best = evalrank_all(
         all_img_emb, all_best_comb_emb, text_to_image_map, image_to_text_map, "best"
     )
-    metrics_worst = evalrank(
+    metrics_worst = evalrank_all(
         all_img_emb, all_worst_comb_emb, text_to_image_map, image_to_text_map, "worst"
     )
 
-    # print("Oracle test: image-to-text")
-    # start_time = time.time()
-    # best_label_indices, worst_label_idx = oracle_test_itt(model, label_embeddings, all_img_emb, all_txt_full, image_to_text_map, device)
-    # end_time = time.time()
-    # print(f"Oracle test time: {end_time - start_time}")
+    print("Oracle test: image-to-text")
+    start_time = time.time()
+    best_label_indices, worst_label_idx = oracle_test_itt(
+        model,
+        label_embeddings,
+        all_img_emb,
+        all_txt_emb,
+        all_txt_full,
+        image_to_text_map,
+        device,
+    )
+    end_time = time.time()
+    print(f"Oracle test time: {end_time - start_time}")
 
-    # # Get the best label embeddings
-    # best_label_embedding = [label_embeddings[bi] for bi in best_label_indices]
-    # worst_label_embedding = [label_embeddings[bi] for bi in worst_label_idx]
-    # with torch.no_grad():
-    #     best_label_embedding = torch.stack(best_label_embedding).to(device)
-    #     all_best_comb_emb2 = model.combine(all_txt_full.to(device), best_label_embedding)
-    #     worst_label_embedding = torch.stack(worst_label_embedding).to(device)
-    #     all_worst_comb_emb2 = model.combine(all_txt_full.to(device), worst_label_embedding)
+    # Get the best label embeddings
+    best_label_embedding = [label_embeddings[bi] for bi in best_label_indices]
+    worst_label_embedding = [label_embeddings[bi] for bi in worst_label_idx]
+    with torch.no_grad():
+        best_label_embedding = torch.stack(best_label_embedding).to(device)
+        all_best_comb_emb2 = model.combine(
+            all_txt_emb.to(device), all_txt_full.to(device), best_label_embedding
+        )
+        worst_label_embedding = torch.stack(worst_label_embedding).to(device)
+        all_worst_comb_emb2 = model.combine(
+            all_txt_emb.to(device), all_txt_full.to(device), worst_label_embedding
+        )
 
     # # Normalize embeddings
     all_img_emb /= torch.norm(all_img_emb, dim=1, keepdim=True)
     all_txt_emb /= torch.norm(all_txt_emb, dim=1, keepdim=True)
-    # all_best_comb_emb2 = all_best_comb_emb2.to(all_img_emb.device)
-    # all_best_comb_emb2 /= torch.norm(all_best_comb_emb2, dim=1, keepdim=True)
-    # all_worst_comb_emb2 = all_worst_comb_emb2.to(all_img_emb.device)
-    # all_worst_comb_emb2 /= torch.norm(all_worst_comb_emb2, dim=1, keepdim=True)
+    all_best_comb_emb2 = all_best_comb_emb2.to(all_img_emb.device)
+    all_best_comb_emb2 /= torch.norm(all_best_comb_emb2, dim=1, keepdim=True)
+    all_worst_comb_emb2 = all_worst_comb_emb2.to(all_img_emb.device)
+    all_worst_comb_emb2 /= torch.norm(all_worst_comb_emb2, dim=1, keepdim=True)
 
-    # # Evaluate the embeddings
-    # metrics_best2 = evalrank(all_img_emb, all_best_comb_emb2, text_to_image_map, image_to_text_map, "best2")
-    # metrics_worst2 = evalrank(all_img_emb, all_worst_comb_emb2, text_to_image_map, image_to_text_map, "worst2")
+    # Evaluate the embeddings
+    metrics_best2 = evalrank_all(
+        all_img_emb, all_best_comb_emb2, text_to_image_map, image_to_text_map, "best2"
+    )
+    metrics_worst2 = evalrank_all(
+        all_img_emb, all_worst_comb_emb2, text_to_image_map, image_to_text_map, "worst2"
+    )
 
-    metrics_raw = evalrank(all_img_emb, all_txt_emb, text_to_image_map, image_to_text_map, "raw")
+    metrics_raw = evalrank_all(
+        all_img_emb, all_txt_emb, text_to_image_map, image_to_text_map, "raw"
+    )
+
+    # Difference between two dictionaries
+    metrics_diff = compute_metric_difference(metrics_best, metrics_raw, "diff")
+    metrics_diff2 = compute_metric_difference(metrics_best2, metrics_raw, "diff2")
 
     metrics_total = {
+        "test/epoch": epoch,
         **metrics_raw,
         **metrics_best,
         **metrics_worst,
-        "test/epoch": epoch,
-    }  # **metrics_best2, **metrics_worst2}
+        **metrics_best2,
+        **metrics_worst2,
+        **metrics_diff,
+        **metrics_diff2,
+    }
 
     return metrics_total
+
+
+def test(cfg: DictConfig):
+    from src.models.cdc import CDC
+
+    model = CDC()
+    model = model.to(device)
+    from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer
+
+    from src.data.cdc_datamodule import CDC_test
+
+    processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+    test_dataset = CDC_test(
+        annotation_path=cfg.dataset.test_path,
+        image_path=cfg.dataset.img_path_test,
+        processor=processor,
+        ratio=1,
+    )
+
+    test_dataloader = DataLoader(
+        test_dataset,
+        batch_size=cfg.eval.batch_size,
+        shuffle=False,
+        num_workers=cfg.train.num_workers,
+    )
+
+    # Randomly generate label_embeddings of size [50, 512]
+    label_embeddings = torch.randn(50, 512, dtype=torch.float32, device=device)
+
+    inference_test(
+        model,
+        processor,
+        dataloader=test_dataloader,
+        label_embeddings=label_embeddings,
+        epoch=0,
+        device=device,
+    )
+
+
+@hydra.main(config_path="../../configs", config_name="redcaps", version_base=None)
+def main(cfg):
+    test(cfg)
+
+
+if __name__ == "__main__":
+    main()
