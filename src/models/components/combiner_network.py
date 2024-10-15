@@ -342,6 +342,15 @@ class Combiner_transformer2(nn.Module):
             num_layers=num_layers,
         )
 
+        # Additional scalar dynamic weighting
+        self.dynamic_scalar = nn.Sequential(
+            nn.Linear(projection_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid(),
+        )
+
         self.batch_norm = nn.BatchNorm1d(projection_dim)
 
         # Larger dynamic scalar means more weight on the combined features
@@ -369,10 +378,16 @@ class Combiner_transformer2(nn.Module):
 
         combined_features = self.simple_transformer(label_features, text_full)
 
-        self.scalar.add(1)  # No dynamic scalar
+        # Dynamic scalar
+        dynamic_scalar = self.dynamic_scalar(combined_features)
+        self.scalar.add(dynamic_scalar.mean().item())
 
         # Skip-connection and normalization
-        output = self.batch_norm(combined_features + text_features)
+        output = self.batch_norm(
+            combined_features
+            + dynamic_scalar * text_features
+            + (1 - dynamic_scalar) * label_features
+        )
 
         return output
 
