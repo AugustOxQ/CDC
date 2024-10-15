@@ -238,6 +238,8 @@ class Clustering:
         else:
             raise ValueError("update_type must be 'hard' or 'soft'.")
 
+        if len(cluster_centers) == 0:
+            cluster_centers = torch.zeros((1, original_embeddings.shape[-1]), device=device)
         return updated_embeddings, cluster_centers
 
 

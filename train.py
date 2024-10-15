@@ -360,7 +360,7 @@ def run(cfg: DictConfig, **kwargs):
 
         if cfg.control.train_2:  # KMeans update
             n_clusters = n_clusters_list[epoch]  # Number of clusters for the current epoch
-            # alpha to control the soft update
+            # An adaptive alpha which minimum 0.1 and maximum 0.9, slide depends on k_means_middle_epoch - k_means_start_epoch
             alpha = 0.9 * (1 - (k_means_middle_epoch - epoch) / k_means_middle_epoch)
 
             # Perform clustering and update embeddings by merging
@@ -380,12 +380,13 @@ def run(cfg: DictConfig, **kwargs):
 
                 # Perform UMAP and clustering on unique embeddings
                 print("##########Performing UMAP for computation##########")
-                umap_features_high = clustering.get_umap(label_embedding, n_components=8)
+                umap_features_high = clustering.get_umap(label_embedding, n_components=2)
 
                 print("##########Performing Clustering##########")
                 umap_labels, _ = clustering.get_hdbscan(umap_features_high, n_clusters=n_clusters)
+                unique_umap_labels = torch.unique(umap_labels)
+                print(f"Unique UMAP labels: {unique_umap_labels.size(0)}")
 
-                print("##########Performing clustering update##########")
                 # Map clustering results back to the original embeddings
                 if epoch < k_means_middle_epoch:
                     update_noise = "ignore"
@@ -396,8 +397,6 @@ def run(cfg: DictConfig, **kwargs):
                     update_type = "hard"
                     high_lr = False
                     print("##########Performing hard clustering update##########")
-
-                # An adaptive alpha which minimum 0.1 and maximum 0.9, slide depends on k_means_middle_epoch - k_means_start_epoch
 
                 updated_embeddings, cluster_centers = clustering.hdbscan_update(
                     umap_labels=umap_labels,
