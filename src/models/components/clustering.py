@@ -1,10 +1,12 @@
 # import numpy as np
 import random
 from collections import defaultdict
+from cProfile import label
 
 import dask.array as da
 import numpy as np
 import torch
+import umap
 from cuml.cluster import HDBSCAN, KMeans
 from cuml.dask.manifold import UMAP as MNMG_UMAP
 from cuml.datasets import make_blobs
@@ -21,9 +23,6 @@ class Clustering:
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.cluster = None
         self.client = None
-        self.umap_model = None
-        self.cluster_model = None
-        # self.cluster_history = defaultdict(set)
 
     def initialize_cluster(self):
         # Initialize Dask CUDA cluster and client
@@ -35,41 +34,44 @@ class Clustering:
         self.client.close()  # type: ignore
         self.cluster.close()  # type: ignore
 
-    def close_umap(self):
-        self.umap_model = None
-
-    def close_cluster_model(self):
-        self.cluster_model = None
-
-    def get_umap(self, label_embedding):
+    def get_umap(self, label_embedding, n_components: int = 2):
         # Perform UMAP dimensionality reduction on embeddings
         self.initialize_cluster()
 
         label_embedding = label_embedding.to(self.device)
         label_embedding_np = label_embedding.cpu().numpy()
 
-        local_model = UMAP(random_state=42)
+        local_model = UMAP(random_state=42, n_components=n_components)
         umap_features = local_model.fit_transform(label_embedding_np)
-        self.umap_model = local_model
 
         self.close_cluster()
 
         umap_features = torch.tensor(umap_features, device=self.device)
         return umap_features
 
-    def predict_umap(self, label_embedding):
+    def get_and_predict_umap(
+        self, label_embedding, label_embeddings_new=None, n_components: int = 2
+    ):
         self.initialize_cluster()
 
         label_embedding = label_embedding.to(self.device)
         label_embedding_np = label_embedding.cpu().numpy()
 
-        umap_features = self.umap_model.transform(label_embedding_np)  # type: ignore
+        local_model = UMAP(random_state=42, n_components=n_components)
+        umap_features = local_model.fit_transform(label_embedding_np)
+
+        # Predict UMAP features for new embeddings
+        if label_embeddings_new is not None:
+            label_embeddings_new = label_embeddings_new.to(self.device)
+            label_embeddings_new_np = label_embeddings_new.cpu().numpy()
+            umap_features_new = local_model.transform(label_embeddings_new_np)  # type: ignore
 
         self.close_cluster()
-        self.close_umap()
 
         umap_features = torch.tensor(umap_features, device=self.device)
-        return umap_features
+        umap_features_new = torch.tensor(umap_features_new, device=self.device)
+
+        return umap_features, umap_features_new
 
     def get_kmeans(self, umap_features, n_clusters):
         # Perform KMeans clustering on UMAP features
@@ -145,9 +147,6 @@ class Clustering:
         original_embeddings,
         update_type="hard",
         alpha=0.5,
-        repulsion_factor=0.05,
-        random_repulsion=False,
-        threshold_k=1000,
         update_noise="ignore",  # 'ignore' or 'assign'
     ):
         device = original_embeddings.device
@@ -167,15 +166,15 @@ class Clustering:
         updated_embeddings = original_embeddings.clone()
 
         # Map labels to indices for cluster centers
-        label_to_idx = {label.item(): idx for idx, label in enumerate(non_noise_labels)}
+        label_to_idx = {nn_label.item(): idx for idx, nn_label in enumerate(non_noise_labels)}
 
         # Calculate the mean of the embeddings for each cluster
         print("Calculating cluster centers")
-        for label in tqdm(non_noise_labels):
-            cluster_indices = (umap_labels == label).nonzero(as_tuple=True)[0].to(device)
+        for non_noise_label in tqdm(non_noise_labels):
+            cluster_indices = (umap_labels == non_noise_label).nonzero(as_tuple=True)[0].to(device)
             cluster_embeddings = original_embeddings[cluster_indices]
             cluster_center = cluster_embeddings.mean(dim=0)
-            cluster_centers[label_to_idx[label.item()]] = cluster_center
+            cluster_centers[label_to_idx[non_noise_label.item()]] = cluster_center
 
         if update_noise == "assign":
             print("Assigning noise points to nearest clusters")
@@ -207,23 +206,27 @@ class Clustering:
         print("Updating embeddings")
         if update_type == "hard":
             # Hard update: Replace embeddings with their corresponding cluster centers
-            for label in tqdm(unique_labels):
-                cluster_indices = (umap_labels == label).nonzero(as_tuple=True)[0].to(device)
-                if label == -1:
+            for non_noise_label in tqdm(unique_labels):
+                cluster_indices = (
+                    (umap_labels == non_noise_label).nonzero(as_tuple=True)[0].to(device)
+                )
+                if non_noise_label == -1:
                     if update_noise == "assign":
                         # Noise points have been assigned to clusters
                         continue
                     else:
                         # Do not update noise points
                         continue
-                cluster_center = cluster_centers[label_to_idx[label.item()]]
+                cluster_center = cluster_centers[label_to_idx[non_noise_label.item()]]
                 updated_embeddings[cluster_indices] = cluster_center
         elif update_type == "soft":
-            for label in tqdm(non_noise_labels):
+            for non_noise_label in tqdm(non_noise_labels):
                 cluster_indices = (
-                    (umap_labels == label).nonzero(as_tuple=True)[0].to(original_embeddings.device)
+                    (umap_labels == non_noise_label)
+                    .nonzero(as_tuple=True)[0]
+                    .to(original_embeddings.device)
                 )
-                if label == -1:
+                if non_noise_label == -1:
                     if update_noise == "assign":
                         # Noise points have been assigned to clusters
                         continue
@@ -232,7 +235,7 @@ class Clustering:
                         continue
                 updated_embeddings[cluster_indices] = (1 - alpha) * original_embeddings[
                     cluster_indices
-                ] + alpha * cluster_centers[label_to_idx[label.item()]]
+                ] + alpha * cluster_centers[label_to_idx[non_noise_label.item()]]
         else:
             raise ValueError("update_type must be 'hard' or 'soft'.")
 
@@ -319,7 +322,7 @@ def test_hdbscan():
     num_different_rows = torch.sum(differences).item()
     print(num_different_rows)
 
-    umap_features_new = clustering.predict_umap(updated_embeddings)
+    umap_features_new = clustering.get_and_predict_umap(updated_embeddings)
     umap_labels_new, centers_new = clustering.get_hdbscan(umap_features_new, n_clusters=1024 - 60)
 
     updated_embeddings_new, centers_new = clustering.hdbscan_update(

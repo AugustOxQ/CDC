@@ -374,23 +374,23 @@ def run(cfg: DictConfig, **kwargs):
                 sample_ids, label_embedding = embedding_manager.get_all_embeddings()
 
                 # Perform UMAP and clustering on unique embeddings
-                print("##########Performing UMAP##########")
-                umap_features = clustering.get_umap(label_embedding)
+                print("##########Performing UMAP for computation##########")
+                umap_features_high = clustering.get_umap(label_embedding, n_components=8)
 
                 print("##########Performing Clustering##########")
-                umap_labels, umap_centers = clustering.get_hdbscan(
-                    umap_features, n_clusters=n_clusters
-                )
+                umap_labels, _ = clustering.get_hdbscan(umap_features_high, n_clusters=n_clusters)
 
                 print("##########Performing clustering update##########")
                 # Map clustering results back to the original embeddings
                 if epoch < k_means_middle_epoch:
                     update_noise = "ignore"
                     update_type = "soft"
+                    print("##########Performing soft clustering update##########")
                 else:
                     update_noise = "assign"
                     update_type = "hard"
                     high_lr = False
+                    print("##########Performing hard clustering update##########")
 
                 # An adaptive alpha which minimum 0.1 and maximum 0.9, slide depends on k_means_middle_epoch - k_means_start_epoch
 
@@ -399,17 +399,12 @@ def run(cfg: DictConfig, **kwargs):
                     original_embeddings=label_embedding,
                     update_type=update_type,
                     alpha=alpha,
-                    repulsion_factor=0.1,
-                    random_repulsion=False,
-                    threshold_k=first_stage_n,
                     update_noise=update_noise,
                 )
 
                 # Find unique embeddings
                 unique_embeddings, _ = torch.unique(updated_embeddings, return_inverse=True, dim=0)
                 print(f"Unique embeddings after clustering update: {unique_embeddings.size(0)}")
-
-                updated_umap_features = clustering.predict_umap(updated_embeddings)
 
                 # Check how many embeddings have been updated by k-means
                 differences = torch.any(label_embedding != updated_embeddings, dim=1)
@@ -435,10 +430,17 @@ def run(cfg: DictConfig, **kwargs):
 
                 if cfg.control.save:
                     # Plot UMAP before clustering update
+
+                    print("##########Performing UMAP for visualisation##########")
+                    umap_features, updated_umap_features = clustering.get_and_predict_umap(
+                        label_embedding, updated_embeddings
+                    )
+
                     umap_features_np = umap_features.cpu().numpy()
                     umap_labels_np = umap_labels.cpu().numpy()
                     updated_umap_features_np = updated_umap_features.cpu().numpy()
-                    plot_umap(
+
+                    path_umap = plot_umap(
                         umap_features_np,
                         umap_labels_np,
                         plot_dir,
@@ -446,7 +448,7 @@ def run(cfg: DictConfig, **kwargs):
                         samples_to_track,
                     )
 
-                    plot_umap(
+                    path_umap_after_update = plot_umap(
                         updated_umap_features_np,
                         umap_labels_np,
                         plot_dir,
@@ -454,7 +456,7 @@ def run(cfg: DictConfig, **kwargs):
                         samples_to_track,
                     )
 
-                    plot_umap_nooutlier(
+                    path_umap_nooutlier = plot_umap_nooutlier(
                         umap_features_np,
                         umap_labels_np,
                         plot_dir,
@@ -469,6 +471,10 @@ def run(cfg: DictConfig, **kwargs):
                         "train_2/alpha": alpha,
                         "train_2/n_unique": unique_embeddings.size(0),
                         "train_2/n_clusters_center": cluster_centers.size(0),
+                        # Log image by wandb
+                        "train_2/umap": wandb.Image(path_umap),
+                        "train_2/umap_after_update": wandb.Image(path_umap_after_update),
+                        "train_2/umap_nooutlier": wandb.Image(path_umap_nooutlier),
                     }
                 )
 

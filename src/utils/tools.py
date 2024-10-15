@@ -162,7 +162,7 @@ def plot_umap(umap_features_np, umap_labels, plot_dir, epoch, samples_to_track=[
         umap_features_np[~tmp_labels, 0],
         umap_features_np[~tmp_labels, 1],
         c=[0.5, 0.5, 0.5],
-        s=0.1,
+        s=0.2,
         alpha=0.5,
     )
 
@@ -170,7 +170,7 @@ def plot_umap(umap_features_np, umap_labels, plot_dir, epoch, samples_to_track=[
         umap_features_np[tmp_labels, 0],
         umap_features_np[tmp_labels, 1],
         c=umap_labels[tmp_labels],
-        s=0.1,
+        s=0.2,
         alpha=0.5,
     )
 
@@ -187,9 +187,13 @@ def plot_umap(umap_features_np, umap_labels, plot_dir, epoch, samples_to_track=[
     plt.title(f"UMAP clusters at epoch {epoch}")
 
     plt.colorbar()
+
     # output the figure
-    plt.savefig(os.path.join(plot_dir, f"umap_{epoch}.png"))
+    save_path = os.path.join(plot_dir, f"umap_{epoch}.png")
+    plt.savefig(save_path)
     plt.close(fig)
+
+    return save_path
 
 
 def plot_umap_nooutlier(
@@ -213,7 +217,7 @@ def plot_umap_nooutlier(
         filtered_features[~tmp_labels, 0],
         filtered_features[~tmp_labels, 1],
         c=[0.5, 0.5, 0.5],
-        s=0.1,
+        s=0.2,
         alpha=0.5,
     )
 
@@ -221,7 +225,7 @@ def plot_umap_nooutlier(
         filtered_features[tmp_labels, 0],
         filtered_features[tmp_labels, 1],
         c=filtered_labels[tmp_labels],
-        s=0.1,
+        s=0.2,
         alpha=0.5,
     )
 
@@ -241,8 +245,11 @@ def plot_umap_nooutlier(
     plt.colorbar()
 
     # output the figure
-    plt.savefig(os.path.join(plot_dir, f"umap_{epoch}_nooutlier.png"))
+    save_path = os.path.join(plot_dir, f"umap_{epoch}_nooutlier.png")
+    plt.savefig(save_path)
     plt.close(fig)
+
+    return save_path
 
 
 def test_umap():
