@@ -40,23 +40,28 @@ def calculate_average_precision(correct_positions, total_relevant):
     return ap_sum / total_relevant
 
 
-def compute_metric_difference(metrics_kwd1, metrics_kwd2, new_kwd):
+def compute_metric_difference(metrics_1, metrics2, metrics_kwd2, new_kwd):
     metric_diff = {}
 
-    for key in metrics_kwd1:
+    for key in metrics_1:
         # Extract the metric name by removing the kwd prefix (everything after '/')
         metric_name = key.split("/")[1]
 
         # Find the corresponding key in metrics_kwd2
-        corresponding_key_kwd2 = f"{metrics_kwd2.split('/')[0]}/{metric_name}"
+        corresponding_key_kwd2 = f"{metrics_kwd2}/{metric_name}"
 
         # Compute the difference between the corresponding metrics
-        if key in metrics_kwd1 and corresponding_key_kwd2 in metrics_kwd2:
+        if key in metrics_1 and corresponding_key_kwd2 in metrics2:
             metric_diff[f"{new_kwd}/{metric_name}"] = (
-                metrics_kwd1[key] - metrics_kwd2[corresponding_key_kwd2]
+                metrics_1[key] - metrics2[corresponding_key_kwd2]
             )
         else:
             print(f"Key {metric_name} not found in both dictionaries.")
+
+    print(f"############start#########{new_kwd}#########################")
+    for key, value in metric_diff.items():
+        print(f"{key}: {value}")
+    print(f"############end#########{new_kwd}#########################")
 
     return metric_diff
 

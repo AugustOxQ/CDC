@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import transformers
 from omegaconf import DictConfig, OmegaConf
-from sklearn.cluster import k_means
+from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -92,12 +92,12 @@ def train(cfg: DictConfig, **kwargs):
             betas=(cfg.train.betas[0], cfg.train.betas[1]),
         )
 
-        comb_emb = model.combine(txt_emb, txt_full, label_embedding)
+        comb_emb = model.module.combine(txt_emb, txt_full, label_embedding)
 
         label_embedding_neg = replace_with_most_different(
             label_embedding
         )  # Sample new label embeddings
-        comb_emb_neg = model.combine(txt_emb, txt_full, label_embedding_neg)
+        comb_emb_neg = model.module.combine(txt_emb, txt_full, label_embedding_neg)
 
         loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
         loss = loss_dict["total_loss"]
@@ -124,7 +124,7 @@ def train(cfg: DictConfig, **kwargs):
         scheduler.step(epoch + batch_id / len(train_dataloader))
         if batch_id % log_interval == 0 or batch_id == len(train_dataloader) - 1:
             print(
-                f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}, Dynamic Scalar: {model.combiner.print_scalar()}"
+                f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}, Dynamic Scalar: {model.module.combiner.print_scalar()}"
             )
 
         # Wandb logger
@@ -136,7 +136,7 @@ def train(cfg: DictConfig, **kwargs):
                 "train/label_contrastive_loss": loss_dict["label_contrastive_loss"].item(),
                 "train/diff_contrastive_loss": loss_dict["diff_contrastive_loss"].item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
-                "train/dynamic_scalar": model.combiner.get_newest(),
+                "train/dynamic_scalar": model.module.combiner.get_newest(),
             },
         )
 
@@ -156,14 +156,17 @@ def train(cfg: DictConfig, **kwargs):
 def run(cfg: DictConfig, **kwargs):
     # Get args
     logger_dir = kwargs["logger_dir"]
-
     wandb_run = kwargs["wandb_run"]
+    # Initialize Model
     model = CDC(
         clip_trainable=False,
         d_model=cfg.model.d_model,
         nhead=cfg.model.num_heads,
         num_layers=cfg.model.num_layers,
-    ).to(device)
+    )
+    model = nn.DataParallel(model)
+    model.to(device)
+
     # preprocess = AutoImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
     # tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
     processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
@@ -362,8 +365,10 @@ def run(cfg: DictConfig, **kwargs):
 
             # Perform clustering and update embeddings by merging
             if (
-                k_means_start_epoch <= epoch < k_means_end_epoch
-                and n_clusters_list[max(epoch - 1, 0)] != n_clusters
+                k_means_start_epoch
+                <= epoch
+                < k_means_end_epoch
+                # and n_clusters_list[max(epoch - 1, 0)] != n_clusters
             ):
                 print(
                     f"##########Epoch {epoch}: Expected number of clusters: {n_clusters}##########"

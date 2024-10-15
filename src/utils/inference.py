@@ -158,7 +158,9 @@ def extract_and_store_features(
             ).to(device)
 
             with torch.no_grad():
-                img_emb, txt_emb, _, txt_full = model.encode_img_txt(image_input, text_input)
+                img_emb, txt_emb, _, txt_full = model.module.encode_img_txt(
+                    image_input, text_input
+                )
                 img_emb, txt_emb, txt_full = (
                     img_emb.cpu().numpy(),
                     txt_emb.cpu().numpy(),
@@ -204,10 +206,12 @@ def inference_train(model, dataloader, device, epoch=0, Ks=[1, 5, 10], max_batch
             label_embedding_shuffled = replace_with_most_different(label_embedding)
 
             # Combine embeddings
-            comb_emb = model.combine(txt_emb_cls, txt_emb, label_embedding)
+            comb_emb = model.module.combine(txt_emb_cls, txt_emb, label_embedding)
 
             # Combine embeddings (shuffled)
-            comb_emb_shuffled = model.combine(txt_emb_cls, txt_emb, label_embedding_shuffled)
+            comb_emb_shuffled = model.module.combine(
+                txt_emb_cls, txt_emb, label_embedding_shuffled
+            )
 
             # Calculate cosine similarity within batch
             # Calculate cosine similarity between image and text embeddings
@@ -327,7 +331,7 @@ def oracle_test_tti(
                 )
 
                 # Combine text embedding with label embedding
-                comb_emb = model.combine(
+                comb_emb = model.module.combine(
                     txt_emb[text_id : text_id + 1],
                     txt_full[text_id : text_id + 1],
                     expanded_label_emb,
@@ -407,7 +411,7 @@ def oracle_test_itt(
     with torch.no_grad():
         for label_idx, label_embedding in enumerate(tqdm(label_embeddings)):
             expanded_label_emb = label_embedding.unsqueeze(0).expand(num_texts, -1)
-            combined_txt_label_emb[:, label_idx, :] = model.combine(
+            combined_txt_label_emb[:, label_idx, :] = model.module.combine(
                 txt_emb, txt_full, expanded_label_emb
             )
 
@@ -557,7 +561,7 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
                 text_to_image_map += [image_index] * captions_per_image
                 image_index += 1
 
-            img_emb, txt_emb, _, txt_full = model.encode_img_txt(image_input, text_input)
+            img_emb, txt_emb, _, txt_full = model.module.encode_img_txt(image_input, text_input)
 
             all_img_emb.append(img_emb.cpu())
             all_txt_emb.append(txt_emb.cpu())
@@ -594,11 +598,11 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
     worst_label_embedding = [label_embeddings[bi] for bi in worst_label_idx]
     with torch.no_grad():
         best_label_embedding = torch.stack(best_label_embedding).to(device)
-        all_best_comb_emb = model.combine(
+        all_best_comb_emb = model.module.combine(
             all_txt_emb.to(device), all_txt_full.to(device), best_label_embedding
         )
         worst_label_embedding = torch.stack(worst_label_embedding).to(device)
-        all_worst_comb_emb = model.combine(
+        all_worst_comb_emb = model.module.combine(
             all_txt_emb.to(device), all_txt_full.to(device), worst_label_embedding
         )
 
@@ -635,11 +639,11 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
     worst_label_embedding = [label_embeddings[bi] for bi in worst_label_idx]
     with torch.no_grad():
         best_label_embedding = torch.stack(best_label_embedding).to(device)
-        all_best_comb_emb2 = model.combine(
+        all_best_comb_emb2 = model.module.combine(
             all_txt_emb.to(device), all_txt_full.to(device), best_label_embedding
         )
         worst_label_embedding = torch.stack(worst_label_embedding).to(device)
-        all_worst_comb_emb2 = model.combine(
+        all_worst_comb_emb2 = model.module.combine(
             all_txt_emb.to(device), all_txt_full.to(device), worst_label_embedding
         )
 
@@ -664,8 +668,8 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
     )
 
     # Difference between two dictionaries
-    metrics_diff = compute_metric_difference(metrics_best, metrics_raw, "diff")
-    metrics_diff2 = compute_metric_difference(metrics_best2, metrics_raw, "diff2")
+    metrics_diff = compute_metric_difference(metrics_best, metrics_raw, "raw", "diff")
+    metrics_diff2 = compute_metric_difference(metrics_best2, metrics_raw, "raw", "diff2")
 
     metrics_total = {
         "test/epoch": epoch,
@@ -685,6 +689,7 @@ def test(cfg: DictConfig):
     from src.models.cdc import CDC
 
     model = CDC()
+    model = torch.nn.DataParallel(model)
     model = model.to(device)
     from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer
 

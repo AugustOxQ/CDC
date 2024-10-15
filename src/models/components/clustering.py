@@ -6,7 +6,6 @@ from cProfile import label
 import dask.array as da
 import numpy as np
 import torch
-import umap
 from cuml.cluster import HDBSCAN, KMeans
 from cuml.dask.manifold import UMAP as MNMG_UMAP
 from cuml.datasets import make_blobs
