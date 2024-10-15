@@ -401,7 +401,7 @@ def run(cfg: DictConfig, **kwargs):
                     umap_labels=umap_labels,
                     original_embeddings=label_embedding,
                     update_type=update_type,
-                    alpha=0.5,
+                    alpha=alpha,
                     repulsion_factor=0.1,
                     random_repulsion=False,
                     threshold_k=first_stage_n,

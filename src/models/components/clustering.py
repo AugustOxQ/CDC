@@ -205,6 +205,13 @@ class Clustering:
             # Hard update: Replace embeddings with their corresponding cluster centers
             for label in tqdm(unique_labels):
                 cluster_indices = (umap_labels == label).nonzero(as_tuple=True)[0].to(device)
+                if label == -1:
+                    if update_noise == "assign":
+                        # Noise points have been assigned to clusters
+                        continue
+                    else:
+                        # Do not update noise points
+                        continue
                 cluster_center = cluster_centers[label_to_idx[label.item()]]
                 updated_embeddings[cluster_indices] = cluster_center
         elif update_type == "soft":
@@ -212,6 +219,13 @@ class Clustering:
                 cluster_indices = (
                     (umap_labels == label).nonzero(as_tuple=True)[0].to(original_embeddings.device)
                 )
+                if label == -1:
+                    if update_noise == "assign":
+                        # Noise points have been assigned to clusters
+                        continue
+                    else:
+                        # Do not update noise points
+                        continue
                 updated_embeddings[cluster_indices] = (1 - alpha) * original_embeddings[
                     cluster_indices
                 ] + alpha * cluster_centers[label_to_idx[label.item()]]
