@@ -165,3 +165,40 @@ class SimpleTransformer2(nn.Module):
         fused_image_feature = self.output_projection(updated_image_feature)  # [batch, 512]
 
         return fused_image_feature
+
+
+class SimpleResidule(nn.Module):
+    def __init__(self, input_dim=512, hidden_dim=512, dropout_rate=0.5):
+        super().__init__()
+
+        # First fully connected layer (input -> hidden)
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.dropout1 = nn.Dropout(dropout_rate)
+
+        # Second fully connected layer (hidden -> input) with residual connection
+        self.fc2 = nn.Linear(hidden_dim, input_dim)
+        self.bn2 = nn.BatchNorm1d(input_dim)
+        self.dropout2 = nn.Dropout(dropout_rate)
+
+        # Activation function
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        if x.dim() == 3:
+            x = x.squeeze(1)  # Remove the second dimension to shape [batch, 512]
+        # First layer with batch normalization, activation, and dropout
+        out = self.fc1(x)
+        out = self.bn1(out)
+        out = self.activation(out)
+        out = self.dropout1(out)
+
+        # Second layer with batch normalization, activation, and dropout
+        out = self.fc2(out)
+        out = self.bn2(out)
+        out = self.dropout2(out)
+
+        # Add the residual connection (input + transformed output)
+        out = out + x
+
+        return self.activation(out)  # Apply activation to the output with the residual connection

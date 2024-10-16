@@ -12,6 +12,7 @@ from torch import Tensor, nn
 
 from src.models.components.simple_attention import (
     CrossAttention,
+    SimpleResidule,
     SimpleTransformer,
     SimpleTransformer2,
 )
@@ -197,6 +198,8 @@ class Combiner_cross_attention(nn.Module):
             nn.Linear(projection_dim, projection_dim),
         )
 
+        self.label_encoder = SimpleResidule(input_dim=projection_dim, dropout_rate=0.5)
+
         self.output_layer = nn.Linear(projection_dim, clip_feature_dim)
 
         # Larger dynamic scalar means more weight on the combined features
@@ -222,6 +225,9 @@ class Combiner_cross_attention(nn.Module):
         ), f"text_full should be of shape (batch, L, 512), instead got {text_full.shape}"
 
         # Reshape label_features to (batch, 1, projection_dim) to act as both query and value
+
+        label_features = self.label_encoder(label_features)
+
         label_features = label_features.unsqueeze(1)  # shape: (batch, 1, projection_dim)
 
         # Cross-attention: text_full attends to label_features
@@ -241,13 +247,13 @@ class Combiner_cross_attention(nn.Module):
         self.scalar.add(dynamic_scalar.mean().item())
 
         # Label Dropout
-        label_features_dropout = self.label_dropout(label_features).squeeze(1)
+        label_features_dropout = self.label_dropout(label_features)
 
         # Skip-connection and normalization
         output = self.batch_norm(
             attended_label_features
             + dynamic_scalar * text_features
-            + (1 - dynamic_scalar) * label_features_dropout
+            + (1 - dynamic_scalar) * label_features_dropout.squeeze(1)
         )
 
         return output  # Return the output

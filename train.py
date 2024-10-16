@@ -3,6 +3,7 @@ import os
 import random
 import warnings
 from datetime import datetime
+from turtle import update
 
 import hydra
 import numpy as np
@@ -121,7 +122,8 @@ def train(cfg: DictConfig, **kwargs):
             embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding)
 
         # Log
-        scheduler.step(epoch + batch_id / len(train_dataloader))
+        if scheduler is not None:
+            scheduler.step(epoch + batch_id / len(train_dataloader))
         if batch_id % log_interval == 0 or batch_id == len(train_dataloader) - 1:
             print(
                 f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}, Dynamic Scalar: {model.module.combiner.print_scalar()}"
@@ -271,11 +273,16 @@ def run(cfg: DictConfig, **kwargs):
         weight_decay=cfg.train.weight_decay,
         betas=(cfg.train.betas[0], cfg.train.betas[1]),
     )
-    # scheduler = CosineAnnealingLR(
-    #     optimizer, T_max=cfg.train.T_max, eta_min=cfg.train.lr_min
-    # )
     scheduler = CosineAnnealingWarmRestarts(
         optimizer, T_0=cfg.train.warm_up, T_mult=1, eta_min=cfg.train.lr_min
+    )
+
+    # For training before testing
+    optimizer_tmp = torch.optim.AdamW(
+        model.parameters(),
+        lr=1e-6,
+        weight_decay=cfg.train.weight_decay,
+        betas=(cfg.train.betas[0], cfg.train.betas[1]),
     )
 
     # Callbacks
@@ -503,6 +510,22 @@ def run(cfg: DictConfig, **kwargs):
 
         if cfg.control.test:
             if unique_embeddings is not None:  # and epoch >= k_means_middle_epoch:
+                if update_label_embedding is True:
+                    print("##########Adaptation before testing##########")
+                    _ = train(
+                        cfg,
+                        model=model,
+                        train_dataloader=train_dataloader,
+                        epoch=epoch,
+                        criteria=criteria,
+                        optimizer=optimizer_tmp,
+                        embedding_manager=embedding_manager,
+                        update_label_embedding=False,
+                        high_lr=False,
+                        scheduler=None,
+                        wandb_run=wandb_run,
+                    )
+
                 print("##########Testing test dataset##########")
                 inf_test_log = inference_test(
                     model, processor, test_dataloader, unique_embeddings, epoch, device
