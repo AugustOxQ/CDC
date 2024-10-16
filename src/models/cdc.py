@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.init
 from transformers import CLIPModel
 
-from .components.combiner_network import (
+from src.models.components import (
     Combiner_basic,
     Combiner_cross_attention,
     Combiner_transformer,

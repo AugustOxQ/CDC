@@ -241,7 +241,7 @@ class Combiner_cross_attention(nn.Module):
         self.scalar.add(dynamic_scalar.mean().item())
 
         # Label Dropout
-        label_features_dropout = self.label_dropout(label_features)
+        label_features_dropout = self.label_dropout(label_features).squeeze(1)
 
         # Skip-connection and normalization
         output = self.batch_norm(
@@ -407,7 +407,7 @@ class Combiner_transformer2(nn.Module):
 
 
 def test_forward_variables_shape_and_type():
-    combiner = Combiner_transformer2()
+    combiner = Combiner_cross_attention()
     text_features = torch.randn(2, 512)
     text_full = torch.randn(2, 77, 512)
     label_features = torch.randn(2, 512)
