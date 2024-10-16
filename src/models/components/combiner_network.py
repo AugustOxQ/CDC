@@ -190,6 +190,13 @@ class Combiner_cross_attention(nn.Module):
             nn.Sigmoid(),
         )
 
+        self.label_dropout = nn.Sequential(
+            nn.Linear(projection_dim, projection_dim),
+            nn.ReLU(),
+            nn.Dropout(0.9),
+            nn.Linear(projection_dim, projection_dim),
+        )
+
         self.output_layer = nn.Linear(projection_dim, clip_feature_dim)
 
         # Larger dynamic scalar means more weight on the combined features
@@ -233,8 +240,15 @@ class Combiner_cross_attention(nn.Module):
         dynamic_scalar = self.dynamic_scalar(attended_label_features)
         self.scalar.add(dynamic_scalar.mean().item())
 
+        # Label Dropout
+        label_features_dropout = self.label_dropout(label_features)
+
         # Skip-connection and normalization
-        output = self.batch_norm(attended_label_features + text_features)
+        output = self.batch_norm(
+            attended_label_features
+            + dynamic_scalar * text_features
+            + (1 - dynamic_scalar) * label_features_dropout
+        )
 
         return output  # Return the output
 
