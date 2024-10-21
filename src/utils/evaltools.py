@@ -393,16 +393,17 @@ def evalrank_all(
         f"{kwd}/i2t_R1": image_to_text_recall[0],
         f"{kwd}/i2t_R5": image_to_text_recall[1],
         f"{kwd}/i2t_R10": image_to_text_recall[2],
+        f"{kwd}/i2t_rsum": sum(image_to_text_recall),
         f"{kwd}/i2t_meanR": meanR_i2t,
         f"{kwd}/i2t_medR": medR_i2t,
         f"{kwd}/i2t_mAP": mAP_i2t,
         f"{kwd}/t2i_R1": text_to_image_recall[0],
         f"{kwd}/t2i_R5": text_to_image_recall[1],
         f"{kwd}/t2i_R10": text_to_image_recall[2],
+        f"{kwd}/t2i_rsum": sum(text_to_image_recall),
         f"{kwd}/t2i_meanR": meanR_t2i,
         f"{kwd}/i2t_medR": medR_t2i,
         f"{kwd}/t2i_mAP": mAP_t2i,
-        f"{kwd}/t2i_rsum": sum(text_to_image_recall),
     }
 
     print(f"############start#########{kwd}#########################")

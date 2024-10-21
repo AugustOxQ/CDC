@@ -87,7 +87,7 @@ def train(cfg: DictConfig, **kwargs):
         #     current_lr = 1e-1
         # else:  # low learning rate for label
         #     current_lr = cfg.train.lr
-        current_lr = 1e-5
+        current_lr = 1e-6
         optimizer_label = torch.optim.AdamW(
             [label_embedding],
             lr=current_lr,
