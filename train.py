@@ -31,6 +31,7 @@ from src.utils import (
     calculate_n_clusters_3,
     plot_umap,
     plot_umap_nooutlier,
+    print_model_info,
 )
 from src.utils.inference import (
     extract_and_store_features,
@@ -82,10 +83,11 @@ def train(cfg: DictConfig, **kwargs):
 
         # Initialize optimizer for label_embedding
         # current_lr = optimizer.param_groups[0]["lr"] * 100
-        if high_lr:  # high learning rate for label
-            current_lr = 1e-1
-        else:  # low learning rate for label
-            current_lr = cfg.train.lr
+        # if high_lr:  # high learning rate for label
+        #     current_lr = 1e-1
+        # else:  # low learning rate for label
+        #     current_lr = cfg.train.lr
+        current_lr = 1e-5
         optimizer_label = torch.optim.AdamW(
             [label_embedding],
             lr=current_lr,
@@ -165,9 +167,13 @@ def run(cfg: DictConfig, **kwargs):
         d_model=cfg.model.d_model,
         nhead=cfg.model.num_heads,
         num_layers=cfg.model.num_layers,
+        label_dim=cfg.model.label_dim,
     )
     model = nn.DataParallel(model)
     model.to(device)
+
+    # Print model summary
+    print_model_info(model)
 
     # preprocess = AutoImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
     # tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
@@ -213,7 +219,7 @@ def run(cfg: DictConfig, **kwargs):
     annotations = annotations[: int(len(annotations) * cfg.dataset.ratio)]
     embedding_manager = EmbeddingManager(
         annotations,
-        embedding_dim=512,
+        embedding_dim=cfg.model.label_dim,
         chunk_size=cfg.train.batch_size,
         embeddings_dir=init_dir,
         sample_ids_list=sample_ids_list,

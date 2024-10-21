@@ -3,7 +3,22 @@ import test
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+import torch.nn as nn
 from scipy import stats
+
+
+def print_model_info(model):
+    # 1. Print the structure of the model
+    print("Model Architecture:\n")
+    print(model)
+
+    # 2. Count the total number of parameters and trainable parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    print("\nTotal number of parameters: ", total_params)
+    print("Number of trainable parameters: ", trainable_params)
 
 
 def calculate_n_clusters(
@@ -253,8 +268,6 @@ def plot_umap_nooutlier(
 
 
 def test_umap():
-    import torch
-
     umap_features_np = np.random.rand(10000, 2)
     umap_labels = torch.tensor([0] * 5000 + [1] * 5000, device="cpu")
     print(umap_labels.shape)

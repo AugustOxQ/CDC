@@ -155,6 +155,116 @@ class Combiner_basic(nn.Module):
         return F.normalize(output)
 
 
+class Combiner_basic_low(nn.Module):
+    """Combiner module which once trained fuses textual and label information."""
+
+    def __init__(
+        self,
+        clip_feature_dim: int = 512,
+        projection_dim: int = 512,
+        hidden_dim: int = 512,
+        num_heads: int = 8,
+        num_layers: int = 4,
+        label_dim: int = 32,
+    ) -> None:
+        """
+        :param clip_feature_dim: CLIP input feature dimension (e.g., 512)
+        :param projection_dim: projection dimension (e.g., 256)
+        :param hidden_dim: hidden dimension (e.g., 512)
+        :param num_heads: Number of heads in multi-head attention
+        :param num_layers: Number of transformer layers
+        """
+        super().__init__()
+        self.text_projection_layer = SimpleResidule(
+            input_dim=clip_feature_dim,
+            hidden_dim=hidden_dim,
+            output_dim=projection_dim,
+            dropout_rate=0.5,
+            residual=True,
+        )
+        self.label_projection_layer = SimpleResidule(
+            input_dim=label_dim,
+            hidden_dim=hidden_dim,
+            output_dim=projection_dim,
+            dropout_rate=0.5,
+            residual=False,
+        )
+
+        self.combiner_layer = SimpleResidule(
+            input_dim=projection_dim * 2,
+            hidden_dim=hidden_dim,
+            output_dim=clip_feature_dim,
+            dropout_rate=0.5,
+            residual=False,
+        )
+
+        self.output_layer = nn.Linear(clip_feature_dim, clip_feature_dim)
+
+        self.dropout = nn.Dropout(0.5)
+
+        self.dynamic_scalar = nn.Sequential(
+            nn.Linear(projection_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid(),
+        )
+
+        # Larger dynamic scalar means more weight on the combined features
+        self.scalar = FixedSizeQueue(10)
+
+    def print_scalar(self):
+        return self.scalar.get()
+
+    def get_newest(self):
+        return self.scalar.get_newest()
+
+    @torch.jit.export
+    def forward(self, text_features: Tensor, text_full: Tensor, label_features: Tensor) -> Tensor:
+        """Combine the text features and label features using attention.
+
+        Outputs combined features.
+        :param text_features: CLIP textual features (shape: batch, 512)
+        :param text_full: CLIP textual features with full sequence length (shape: batch, L, 512)
+        :param label_features: Label features (shape: batch, label_dim)
+        :return: combined textual features (shape: batch, 512)
+        """
+        assert (
+            len(text_full.shape) == 3
+        ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
+
+        text_projected_features = self.text_projection_layer(text_features)
+
+        label_projected_features = self.label_projection_layer(label_features)
+
+        raw_combined_features = torch.cat((text_projected_features, label_projected_features), -1)
+
+        combined_features = self.combiner_layer(raw_combined_features)
+
+        dynamic_scalar = self.dynamic_scalar(raw_combined_features)
+        # print(dynamic_scalar.shape) # (batch, 1)
+        self.scalar.add(dynamic_scalar.mean().item())
+        # print(self.scalar.get())
+
+        # # Option1: Output is a combination of combined_featured and text_features and label_projected_features
+        output = (
+            self.output_layer(combined_features)
+            + dynamic_scalar * text_features
+            + (1 - dynamic_scalar) * label_projected_features
+        )
+
+        # Option2: Output is a combination of combined_featured and text_features
+        # output = (
+        #     dynamic_scalar * self.output_layer(combined_features)
+        #     + (1 - dynamic_scalar) * text_features
+        # )
+
+        # Option3: Output is combined_features
+        # output = self.output_layer(combined_features) + text_features
+
+        return F.normalize(output)
+
+
 class Combiner_cross_attention(nn.Module):
     """Combiner module using transformer for combining textual and label information."""
 

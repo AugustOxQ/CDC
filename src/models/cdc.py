@@ -8,6 +8,7 @@ from transformers import CLIPModel
 
 from src.models.components import (
     Combiner_basic,
+    Combiner_basic_low,
     Combiner_cross_attention,
     Combiner_transformer,
     Combiner_transformer2,
@@ -33,6 +34,7 @@ class CDC(nn.Module):
         d_model: int = 512,
         nhead: int = 8,
         num_layers: int = 2,
+        label_dim: int = 32,
     ) -> None:
         super().__init__()
         # Frozen CLIP as feature extractor
@@ -50,8 +52,13 @@ class CDC(nn.Module):
         self.label_encoder = nn.Identity()
 
         # Combiner network to combine text and label features
-        self.combiner = Combiner_cross_attention(
-            512, 512, d_model, num_heads=nhead, num_layers=num_layers
+        self.combiner = Combiner_basic_low(
+            clip_feature_dim=512,
+            projection_dim=512,
+            hidden_dim=d_model,
+            num_heads=nhead,
+            num_layers=num_layers,
+            label_dim=label_dim,
         )
 
     def encode_img(self, images):

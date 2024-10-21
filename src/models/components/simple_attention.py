@@ -168,7 +168,14 @@ class SimpleTransformer2(nn.Module):
 
 
 class SimpleResidule(nn.Module):
-    def __init__(self, input_dim=512, hidden_dim=512, dropout_rate=0.5):
+    def __init__(
+        self,
+        input_dim=512,
+        hidden_dim=512,
+        dropout_rate=0.5,
+        output_dim=512,
+        residual=True,
+    ) -> None:
         super().__init__()
 
         # First fully connected layer (input -> hidden)
@@ -177,12 +184,13 @@ class SimpleResidule(nn.Module):
         self.dropout1 = nn.Dropout(dropout_rate)
 
         # Second fully connected layer (hidden -> input) with residual connection
-        self.fc2 = nn.Linear(hidden_dim, input_dim)
-        self.bn2 = nn.BatchNorm1d(input_dim)
+        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.bn2 = nn.BatchNorm1d(output_dim)
         self.dropout2 = nn.Dropout(dropout_rate)
 
         # Activation function
         self.activation = nn.ReLU()
+        self.residual = residual
 
     def forward(self, x):
         if x.dim() == 3:
@@ -198,7 +206,23 @@ class SimpleResidule(nn.Module):
         out = self.bn2(out)
         out = self.dropout2(out)
 
-        # Add the residual connection (input + transformed output)
-        out = out + x
+        if self.residual:
+            # Add the residual connection (input + transformed output)
+            out = out + x
 
         return self.activation(out)  # Apply activation to the output with the residual connection
+
+
+def test_simple_attention():
+    model = SimpleResidule(32, 512, 0.5, 512, False)
+    input = torch.randn(64, 32)
+    output = model(input)
+    print(output.shape)
+
+
+def main():
+    test_simple_attention()
+
+
+if __name__ == "__main__":
+    main()
