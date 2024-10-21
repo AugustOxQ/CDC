@@ -325,11 +325,11 @@ def run(cfg: DictConfig, **kwargs):
         interval=1,
     )
 
+    unique_embeddings = None
     # Start training
     for epoch in range(max_epoch):
         logger_epoch = {}
         logger_epoch["epoch"] = epoch
-        unique_embeddings = None
 
         # Train
         if cfg.control.train:  # Network training
@@ -370,6 +370,31 @@ def run(cfg: DictConfig, **kwargs):
             inf_train_log = inference_train(model, train_dataloader, device, epoch, [1, 5, 10])
             wandb_run.log(inf_train_log)
             logger_epoch["inference_train"] = inf_train_log
+
+        if cfg.control.test:
+            if unique_embeddings is not None:  # and epoch >= k_means_middle_epoch:
+                # if update_label_embedding is True:
+                #     print("##########Adaptation before testing##########")
+                #     _ = train(
+                #         cfg,
+                #         model=model,
+                #         train_dataloader=train_dataloader,
+                #         epoch=epoch,
+                #         criteria=criteria,
+                #         optimizer=optimizer_tmp,
+                #         embedding_manager=embedding_manager,
+                #         update_label_embedding=False,
+                #         high_lr=False,
+                #         scheduler=None,
+                #         wandb_run=wandb_run,
+                #     )
+
+                print("##########Testing test dataset##########")
+                inf_test_log = inference_test(
+                    model, processor, test_dataloader, unique_embeddings, epoch, device
+                )
+                logger_epoch["inference_test"] = inf_test_log
+                wandb_run.log(inf_test_log)
 
         if cfg.control.train_2:  # KMeans update
             n_clusters = n_clusters_list[epoch]  # Number of clusters for the current epoch
@@ -513,31 +538,6 @@ def run(cfg: DictConfig, **kwargs):
                 sample_ids, label_embedding = embedding_manager.get_all_embeddings()
                 unique_embeddings, _ = torch.unique(label_embedding, return_inverse=True, dim=0)
                 print(f"Unique embeddings: {unique_embeddings.size(0)}")
-
-        if cfg.control.test:
-            if unique_embeddings is not None:  # and epoch >= k_means_middle_epoch:
-                if update_label_embedding is True:
-                    print("##########Adaptation before testing##########")
-                    _ = train(
-                        cfg,
-                        model=model,
-                        train_dataloader=train_dataloader,
-                        epoch=epoch,
-                        criteria=criteria,
-                        optimizer=optimizer_tmp,
-                        embedding_manager=embedding_manager,
-                        update_label_embedding=False,
-                        high_lr=False,
-                        scheduler=None,
-                        wandb_run=wandb_run,
-                    )
-
-                print("##########Testing test dataset##########")
-                inf_test_log = inference_test(
-                    model, processor, test_dataloader, unique_embeddings, epoch, device
-                )
-                logger_epoch["inference_test"] = inf_test_log
-                wandb_run.log(inf_test_log)
 
         # # Save model, epoch, optimizer, scheduler
         # if cfg.control.save:
