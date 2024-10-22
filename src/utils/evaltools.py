@@ -304,7 +304,7 @@ def evalrank_t2i(
         f"{kwd}/t2i_R5": text_to_image_recall[1],
         f"{kwd}/t2i_R10": text_to_image_recall[2],
         f"{kwd}/t2i_meanR": meanR_t2i,
-        f"{kwd}/i2t_medR": medR_t2i,
+        f"{kwd}/t2i_medR": medR_t2i,
         f"{kwd}/t2i_mAP": mAP_t2i,
         f"{kwd}/t2i_rsum": sum(text_to_image_recall),
     }
@@ -402,7 +402,7 @@ def evalrank_all(
         f"{kwd}/t2i_R10": text_to_image_recall[2],
         f"{kwd}/t2i_rsum": sum(text_to_image_recall),
         f"{kwd}/t2i_meanR": meanR_t2i,
-        f"{kwd}/i2t_medR": medR_t2i,
+        f"{kwd}/t2i_medR": medR_t2i,
         f"{kwd}/t2i_mAP": mAP_t2i,
     }
 
