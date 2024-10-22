@@ -22,6 +22,7 @@ import wandb
 from src.data.cdc_datamodule import CDC_test
 from src.data.cdc_datamodule import CDC_train_preextract as CDC_train
 from src.metric.loss import LabelContrastiveLoss
+from src.metric.regularizer import boundary_penalty, l2_regularizer
 from src.models.cdc import CDC
 from src.models.components.clustering import Clustering
 from src.utils import (
@@ -60,6 +61,15 @@ def train(cfg: DictConfig, **kwargs):
     log_interval = cfg.train.log_interval
     wandb_run = kwargs["wandb_run"]
 
+    tmp_gap = min(cfg.train_2.k_means_end_epoch - epoch, 0)  # control label embedding lr
+    label_lr_max = cfg.train.label_lr
+    label_lr_min = cfg.train.label_lr_min
+
+    # interpolate label embedding lr
+    current_lr = label_lr_max - (label_lr_max - label_lr_min) * (
+        tmp_gap / (cfg.train_2.k_means_end_epoch)
+    )
+
     model.train()
     epoch_metrics = {"loss": 0.0, "other_metrics": {}}
 
@@ -81,13 +91,6 @@ def train(cfg: DictConfig, **kwargs):
         label_embedding = label_embedding.to(device).clone().detach().requires_grad_(True)
         label_embedding_cp = label_embedding.clone().detach()
 
-        # Initialize optimizer for label_embedding
-        # current_lr = optimizer.param_groups[0]["lr"] * 100
-        # if high_lr:  # high learning rate for label
-        #     current_lr = 1e-1
-        # else:  # low learning rate for label
-        #     current_lr = cfg.train.lr
-        current_lr = 1e-6
         optimizer_label = torch.optim.AdamW(
             [label_embedding],
             lr=current_lr,
@@ -103,7 +106,10 @@ def train(cfg: DictConfig, **kwargs):
         comb_emb_neg = model.module.combine(txt_emb, txt_full, label_embedding_neg)
 
         loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
-        loss = loss_dict["total_loss"]
+        l2_loss = l2_regularizer(label_embedding, alpha=0.1)
+        boundary_loss = boundary_penalty(label_embedding, radius=1.0, alpha=0.1)
+        loss = loss_dict["total_loss"] + l2_loss + boundary_loss
+
         epoch_metrics["loss"] += loss.item()
         optimizer.zero_grad()
         if update_label_embedding:
@@ -139,6 +145,8 @@ def train(cfg: DictConfig, **kwargs):
                 "train/comb_contrastive_loss": loss_dict["comb_contrastive_loss"].item(),
                 "train/label_contrastive_loss": loss_dict["label_contrastive_loss"].item(),
                 "train/diff_contrastive_loss": loss_dict["diff_contrastive_loss"].item(),
+                "train/l2_loss": l2_loss.item(),
+                "train/boundary_loss": boundary_loss.item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
                 "train/dynamic_scalar": model.module.combiner.get_newest(),
             },
