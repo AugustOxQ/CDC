@@ -380,7 +380,7 @@ def evalrank_all(
     text_embeddings /= text_embeddings.norm(dim=-1, keepdim=True)
 
     # text-to-image recall
-    print("Text-to-image recall...")
+    # print("Text-to-image recall...")
 
     dist_matrix = text_embeddings @ image_embeddings.T  # dist_matrix[i] gives logits for ith text
 
@@ -391,8 +391,6 @@ def evalrank_all(
     # Sort in descending order; first is the biggest logit
     inds = torch.argsort(dist_matrix, dim=1, descending=True)
     inds = inds.to(device)
-    print(f"inds.shape text-to-image: {inds.shape}")
-    # print(inds.shape)
 
     text_to_image_recall = []
 
@@ -409,14 +407,12 @@ def evalrank_all(
     meanR_t2i, medR_t2i, mAP_t2i = calculate_metrics(inds, text_to_image_map, 1)
 
     # image-to-text recall
-    print("Image-to-text recall...")
+    # print("Image-to-text recall...")
     dist_matrix = dist_matrix.T  # dist_matrix[i] gives logits for the ith image
 
     # Sort in descending order; first is the biggest logit
     inds = torch.argsort(dist_matrix, dim=1, descending=True)
     inds = inds.to(device)
-    print(f"inds.shape image-to-text: {inds.shape}")
-    # print(inds.shape)
 
     image_to_text_recall = []
 
@@ -437,7 +433,7 @@ def evalrank_all(
 
     meanR_i2t, medR_i2t, mAP_i2t = calculate_metrics(inds, image_to_text_map, captions_per_image)
 
-    print("Done.")
+    # print("Done.")
     metrics = {
         f"{kwd}/i2t_R1": image_to_text_recall[0],
         f"{kwd}/i2t_R5": image_to_text_recall[1],
@@ -455,10 +451,10 @@ def evalrank_all(
         f"{kwd}/t2i_mAP": mAP_t2i,
     }
 
-    print(f"############start#########{kwd}#########################")
+    print(f"############start-{kwd}#########################")
     for key, value in metrics.items():
         print(f"{key}: {value}")
-    print(f"############end#########{kwd}#########################")
+    print(f"############end-{kwd}#########################\n")
 
     return metrics
 
@@ -494,68 +490,67 @@ def eval_rank_oracle(
     best_inds_itt = None
     best_rank_itt = torch.full((num_image,), math.inf)
 
-    for label_id in tqdm(range(num_labels)):
-        label_emb = label_embeddings[label_id]
-        # broadcast to the same length as all_txt_emb
-        label_emb = label_emb.expand(num_text, -1)
-        label_emb = label_emb.to(device)
+    with torch.no_grad():
+        for label_id in tqdm(range(num_labels)):
+            label_emb = label_embeddings[label_id]
+            # broadcast to the same length as all_txt_emb
+            label_emb = label_emb.expand(num_text, -1)
+            label_emb = label_emb.to(device)
 
-        tmp_comb_emb = model.module.combine(all_txt_emb, all_txt_full, label_emb)
-        tmp_comb_emb /= tmp_comb_emb.norm(dim=-1, keepdim=True)
-        # tmp_comb_emb = all_txt_emb.clone()
-        # tmp_comb_emb /= tmp_comb_emb.norm(dim=-1, keepdim=True)
+            tmp_comb_emb = model.module.combine(all_txt_emb, all_txt_full, label_emb).detach()
+            tmp_comb_emb /= tmp_comb_emb.norm(dim=-1, keepdim=True)
 
-        # text-to-image
-        dist_matrix_tti = tmp_comb_emb @ all_img_emb.T
-        dist_matrix_tti = dist_matrix_tti.cpu()
-        inds_tti = torch.argsort(dist_matrix_tti, dim=1, descending=True)
+            # text-to-image
+            dist_matrix_tti = tmp_comb_emb @ all_img_emb.T
+            dist_matrix_tti = dist_matrix_tti.cpu()
+            inds_tti = torch.argsort(dist_matrix_tti, dim=1, descending=True)
 
-        # Calculate absolute ranking
-        abs_rank_tti = absolute_rank(inds_tti, text_to_image_map, 1)
-        abs_rank_tti = torch.tensor(abs_rank_tti, dtype=torch.float32).cpu()
+            # Calculate absolute ranking
+            abs_rank_tti = absolute_rank(inds_tti, text_to_image_map, 1)
+            abs_rank_tti = torch.tensor(abs_rank_tti, dtype=torch.float32).cpu()
 
-        if best_inds_tti is None:
-            best_inds_tti = inds_tti.clone()
-            best_rank_tti = abs_rank_tti.clone()
-            update_mask = torch.ones((num_text,), dtype=torch.bool)
-        else:
-            # For each query, if the current ranking can recall the correct image and the previous one cannot, update
-            update_mask = abs_rank_tti < best_rank_tti
-            if update_mask.any():
-                best_inds_tti[update_mask] = inds_tti[update_mask]
-                best_rank_tti[update_mask] = abs_rank_tti[update_mask]
+            if best_inds_tti is None:
+                best_inds_tti = inds_tti.clone()
+                best_rank_tti = abs_rank_tti.clone()
+                update_mask = torch.ones((num_text,), dtype=torch.bool)
+            else:
+                # For each query, if the current ranking can recall the correct image and the previous one cannot, update
+                update_mask = abs_rank_tti < best_rank_tti
+                if update_mask.any():
+                    best_inds_tti[update_mask] = inds_tti[update_mask]
+                    best_rank_tti[update_mask] = abs_rank_tti[update_mask]
 
-        # image-to-text
-        dist_matrix_itt = dist_matrix_tti.T
-        dist_matrix_itt = dist_matrix_itt.cpu()
-        inds_itt = torch.argsort(dist_matrix_itt, dim=1, descending=True)
+            # image-to-text
+            dist_matrix_itt = dist_matrix_tti.T
+            dist_matrix_itt = dist_matrix_itt.cpu()
+            inds_itt = torch.argsort(dist_matrix_itt, dim=1, descending=True)
 
-        # Calculate absolute ranking
-        abs_rank_itt = absolute_rank(inds_itt, image_to_text_map, captions_per_image)
-        abs_rank_itt = torch.tensor(abs_rank_itt, dtype=torch.float32).cpu()
+            # Calculate absolute ranking
+            abs_rank_itt = absolute_rank(inds_itt, image_to_text_map, captions_per_image)
+            abs_rank_itt = torch.tensor(abs_rank_itt, dtype=torch.float32).cpu()
 
-        # Sum of ranks per 5 captions, that is sum index i*5 : i*5+5 for each image
-        abs_rank_itt = abs_rank_itt.view(-1, captions_per_image).sum(dim=1)
+            # Sum of ranks per 5 captions, that is sum index i*5 : i*5+5 for each image
+            abs_rank_itt = abs_rank_itt.view(-1, captions_per_image).sum(dim=1)
 
-        if best_inds_itt is None:
-            best_inds_itt = inds_itt.clone()
-            best_rank_itt = abs_rank_itt.clone()
-            update_mask = torch.ones((num_image,), dtype=torch.bool)
-        else:
-            # For each query, if the current ranking can recall the correct image and the previous one cannot, update
-            update_mask = abs_rank_itt < best_rank_itt
-            if update_mask.any():
-                best_inds_itt[update_mask] = inds_itt[update_mask]
-                best_rank_itt[update_mask] = abs_rank_itt[update_mask]
+            if best_inds_itt is None:
+                best_inds_itt = inds_itt.clone()
+                best_rank_itt = abs_rank_itt.clone()
+                update_mask = torch.ones((num_image,), dtype=torch.bool)
+            else:
+                # For each query, if the current ranking can recall the correct image and the previous one cannot, update
+                update_mask = abs_rank_itt < best_rank_itt
+                if update_mask.any():
+                    best_inds_itt[update_mask] = inds_itt[update_mask]
+                    best_rank_itt[update_mask] = abs_rank_itt[update_mask]
 
-        tmp_comb_emb.cpu()
-        del tmp_comb_emb
+            tmp_comb_emb.cpu()
+            del tmp_comb_emb
 
-        torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
     # text-to-image recall
-    print("Text-to-image recall...")
-    best_inds_tti = best_inds_tti.to(device)
+    # print("Text-to-image recall...")
+    best_inds_tti = best_inds_tti.to(device)  # type: ignore
 
     text_to_image_recall = []
 
@@ -572,8 +567,8 @@ def eval_rank_oracle(
     meanR_t2i, medR_t2i, mAP_t2i = calculate_metrics(best_inds_tti, text_to_image_map, 1)
 
     # image-to-text recall
-    print("Image-to-text recall...")
-    best_inds_itt = best_inds_itt.to(device)
+    # print("Image-to-text recall...")
+    best_inds_itt = best_inds_itt.to(device)  # type: ignore
 
     image_to_text_recall = []
 
@@ -598,7 +593,7 @@ def eval_rank_oracle(
 
     torch.cuda.empty_cache()
 
-    print("Done.")
+    # print("Done.")
     metrics = {
         f"{kwd}/i2t_R1": image_to_text_recall[0],
         f"{kwd}/i2t_R5": image_to_text_recall[1],
@@ -616,10 +611,10 @@ def eval_rank_oracle(
         f"{kwd}/t2i_mAP": mAP_t2i,
     }
 
-    print(f"############start#########{kwd}#########################")
+    print(f"############start-{kwd}#########################")
     for key, value in metrics.items():
         print(f"{key}: {value}")
-    print(f"############end#########{kwd}#########################")
+    print(f"############end-{kwd}#########################\n")
 
     return metrics
 

@@ -410,7 +410,10 @@ def run(cfg: DictConfig, **kwargs):
         if cfg.control.train_2:  # KMeans update
             n_clusters = n_clusters_list[epoch]  # Number of clusters for the current epoch
             # An adaptive alpha which minimum 0.1 and maximum 0.9, slide depends on k_means_middle_epoch - k_means_start_epoch
-            alpha = 0.9 * (1 - (k_means_middle_epoch - epoch) / k_means_middle_epoch)
+            alpha = max(
+                min((1 - (k_means_middle_epoch - epoch) / k_means_middle_epoch), 0.85),
+                0.01,
+            )
 
             # Perform clustering and update embeddings by merging
             if (
@@ -535,11 +538,11 @@ def run(cfg: DictConfig, **kwargs):
 
                 # Save unique embeddings
                 torch.save(
-                    unique_embeddings[:50],
+                    unique_embeddings[:300],  # Increase the number of embeddings to save to 300
                     os.path.join(experiment_dir, "unique_embeddings.pt"),
                 )
 
-                if unique_embeddings.size(0) > 50:
+                if unique_embeddings.size(0) > 300:
                     unique_embeddings = cluster_centers
 
             elif epoch >= k_means_middle_epoch:

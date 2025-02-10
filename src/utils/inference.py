@@ -23,6 +23,19 @@ transformers.logging.set_verbosity_error()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def compute_ranks(similarity_matrix):
+    """
+    Compute the rank of the diagonal elements in the sorted similarity matrix.
+    """
+    ranks = []
+    for i in range(similarity_matrix.shape[0]):
+        row = similarity_matrix[i]
+        sorted_indices = np.argsort(row)[::-1]  # Descending order (higher sim first)
+        rank = np.where(sorted_indices == i)[0][0] + 1  # Rank is 1-based
+        ranks.append(rank)
+    return np.mean(ranks)  # Compute mean rank per batch
+
+
 def random_sample_with_replacement(label_embedding):
     """Randomly sample label embeddings with replacement.
 
@@ -166,12 +179,14 @@ def extract_and_store_features(
         return sample_ids_list
 
 
+# TODO: Change this to also ranking-based as in inference_test
+@torch.no_grad()
 def inference_train(model, dataloader, device, epoch=0, Ks=[1, 5, 10], max_batches=25):
     # Read embeddings directly from the dataloader, compare with other mebeddings from the same batch
     model.eval()
-    total_raw_better_count = 0
-    total_shuffled_better_count = 0
-    total_diversity = 0.0
+    total_rank_raw = 0
+    total_rank_comb = 0
+    total_rank_comb_shuffled = 0
     total_samples = 0
 
     with torch.no_grad():
@@ -194,7 +209,7 @@ def inference_train(model, dataloader, device, epoch=0, Ks=[1, 5, 10], max_batch
             txt_emb_cls = txt_emb_cls.to(device)
             label_embedding = label_embedding.to(device)
 
-            # Shuffle label embeddings
+            # Select the most different label embeddings
             label_embedding_shuffled = replace_with_most_different(label_embedding)
 
             # Combine embeddings
@@ -205,44 +220,30 @@ def inference_train(model, dataloader, device, epoch=0, Ks=[1, 5, 10], max_batch
                 txt_emb_cls, txt_emb, label_embedding_shuffled
             )
 
-            # Calculate cosine similarity within batch
-            # Calculate cosine similarity between image and text embeddings
-            cosine_sim_raw = cosine_similarity(
-                img_emb.cpu().numpy(), txt_emb_cls.cpu().numpy()
-            ).diagonal()
+            # Move to CPU for ranking calculations
+            img_emb_cpu = img_emb.cpu().numpy()
+            txt_emb_cls_cpu = txt_emb_cls.cpu().numpy()
+            comb_emb_cpu = comb_emb.cpu().numpy()
+            comb_emb_shuffled_cpu = comb_emb_shuffled.cpu().numpy()
 
-            # Calculate cosine similarity between image and combined embeddings
-            cosine_sim_comb = cosine_similarity(
-                img_emb.cpu().numpy(), comb_emb.cpu().numpy()
-            ).diagonal()
+            # Compute full similarity matrices
+            sim_raw = cosine_similarity(img_emb_cpu, txt_emb_cls_cpu)  # img_emb vs txt_emb_cls
+            sim_comb = cosine_similarity(img_emb_cpu, comb_emb_cpu)  # img_emb vs comb_emb
+            sim_comb_shuffled = cosine_similarity(
+                img_emb_cpu, comb_emb_shuffled_cpu
+            )  # img_emb vs comb_emb_shuffled
 
-            # Calculate cosine similarity between image and combined embeddings (shuffled)
-            cosine_sim_comb_shuffled = cosine_similarity(
-                img_emb.cpu().numpy(), comb_emb_shuffled.cpu().numpy()
-            ).diagonal()
+            # Compute mean rank per batch
+            avg_rank_raw = compute_ranks(sim_raw)
+            avg_rank_comb = compute_ranks(sim_comb)
+            avg_rank_comb_shuffled = compute_ranks(sim_comb_shuffled)
 
-            # Test 1: Whether cosine_sim_comb is equal or greater than cosine_sim_raw
-            comparison_raw = cosine_sim_comb >= cosine_sim_raw
-            raw_better_count = np.sum(comparison_raw)
-            total_raw_better_count += raw_better_count
+            total_rank_raw += avg_rank_raw
+            total_rank_comb += avg_rank_comb
+            total_rank_comb_shuffled += avg_rank_comb_shuffled
+            total_samples += 1  # Track number of processed batches
 
-            # Test 2: Whether cosine_sim_comb is equal or greater than cosine_sim_comb_shuffled
-            comparison_shuffled = cosine_sim_comb >= cosine_sim_comb_shuffled
-            shuffled_better_count = np.sum(comparison_shuffled)
-            total_shuffled_better_count += shuffled_better_count
-
-            # Test 3: Diversity of label embeddings #TODO change this to unique label embddings
-            unique_embeddings = torch.unique(label_embedding, dim=0)
-            normalized_embeddings = F.normalize(unique_embeddings, p=2, dim=1)
-            similarity_matrix = torch.mm(normalized_embeddings, normalized_embeddings.t())
-            mask = torch.triu(torch.ones_like(similarity_matrix), diagonal=1).bool()
-            pairwise_similarities = similarity_matrix[mask]
-            total_diversity += 1 - torch.mean(pairwise_similarities).item()
-
-            # Sample size
-            batch_size = cosine_sim_comb.shape[0]
-            total_samples += batch_size
-
+            # Cleanup
             del (
                 img_emb,
                 txt_emb,
@@ -250,39 +251,33 @@ def inference_train(model, dataloader, device, epoch=0, Ks=[1, 5, 10], max_batch
                 comb_emb,
                 comb_emb_shuffled,
                 label_embedding_shuffled,
-                unique_embeddings,
-                normalized_embeddings,
-                similarity_matrix,
-                mask,
-                pairwise_similarities,
+                img_emb_cpu,
+                txt_emb_cls_cpu,
+                comb_emb_cpu,
+                comb_emb_shuffled_cpu,
             )
-
             torch.cuda.empty_cache()
 
-    # Calculate percentage of better label embeddings
-    raw_better_percentage = total_raw_better_count / total_samples * 100
-    shuffled_better_percentage = total_shuffled_better_count / total_samples * 100
-    diversity_score = total_diversity / max_batches * 100
+    # Compute overall mean rank
+    mean_rank_raw = total_rank_raw / total_samples
+    mean_rank_comb = total_rank_comb / total_samples
+    mean_rank_comb_shuffled = total_rank_comb_shuffled / total_samples
 
     print(
-        f"Epoch {epoch}: Combined embeddings better than raw embeddings: {raw_better_percentage:.2f}%"
+        f"Epoch {epoch}: Mean Rank - Raw: {mean_rank_raw:.2f}, Combined: {mean_rank_comb:.2f}, Shuffled: {mean_rank_comb_shuffled:.2f}"
     )
-    print(
-        f"Epoch {epoch}: Combined embeddings better than shuffled embeddings: {shuffled_better_percentage:.2f}%"
-    )
-    print(f"Epoch {epoch}: Diversity score: {diversity_score:.2f}")
 
     return {
         "val/epoch": epoch,
-        "val/raw_better_percentage": raw_better_percentage,
-        "val/shuffled_better_percentage": shuffled_better_percentage,
-        "val/diversity_score": diversity_score,
+        "val/mean_rank_raw": mean_rank_raw,
+        "val/mean_rank_comb": mean_rank_comb,
+        "val/mean_rank_comb_shuffled": mean_rank_comb_shuffled,
     }
 
 
 def inference_test(model, processor, dataloader, label_embeddings, epoch, device):
-    # Load unique label embeddings up to 50
-    label_embeddings = label_embeddings[:50]
+    # Load unique label embeddings up to 300
+    label_embeddings = label_embeddings[:300]
     all_img_emb = []
     all_txt_emb = []
     all_txt_full = []
@@ -355,7 +350,6 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
     text_to_image_map = torch.LongTensor(text_to_image_map).to(device)
     image_to_text_map = torch.LongTensor(image_to_text_map).to(device)
 
-    print("Oracle test:")
     metrics_oracle = eval_rank_oracle(
         model,
         label_embeddings,  # shape: (N_label, label_dim)
@@ -367,7 +361,6 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
         "oracle",
     )
 
-    print("Raw test:")
     metrics_raw = evalrank_all(
         all_img_emb, all_txt_emb, text_to_image_map, image_to_text_map, "raw"
     )
@@ -858,3 +851,44 @@ if __name__ == "__main__":
 #     print(f"Different indices: {different_indices}")
 
 #     return best_label_indices, worst_label_indices
+
+
+# # Calculate cosine similarity within batch
+#             # Calculate cosine similarity between image and text embeddings
+#             cosine_sim_raw = cosine_similarity(
+#                 img_emb.cpu().numpy(), txt_emb_cls.cpu().numpy()
+#             ).diagonal()
+
+#             # Calculate cosine similarity between image and combined embeddings
+#             cosine_sim_comb = cosine_similarity(
+#                 img_emb.cpu().numpy(), comb_emb.cpu().numpy()
+#             ).diagonal()
+
+#             # Calculate cosine similarity between image and combined embeddings (shuffled)
+#             cosine_sim_comb_shuffled = cosine_similarity(
+#                 img_emb.cpu().numpy(), comb_emb_shuffled.cpu().numpy()
+#             ).diagonal()
+
+#             # Test 1: Whether cosine_sim_comb is equal or greater than cosine_sim_raw
+#             comparison_raw = cosine_sim_comb >= cosine_sim_raw
+#             raw_better_count = np.sum(comparison_raw)
+#             total_raw_better_count += raw_better_count
+
+#             # Test 2: Whether cosine_sim_comb is equal or greater than cosine_sim_comb_shuffled
+#             comparison_shuffled = cosine_sim_comb >= cosine_sim_comb_shuffled
+#             shuffled_better_count = np.sum(comparison_shuffled)
+#             total_shuffled_better_count += shuffled_better_count
+
+#             # Test 3: Diversity of label embeddings
+#             unique_embeddings = torch.unique(label_embedding, dim=0)
+#             normalized_embeddings = F.normalize(unique_embeddings, p=2, dim=1)
+#             similarity_matrix = torch.mm(
+#                 normalized_embeddings, normalized_embeddings.t()
+#             )
+#             mask = torch.triu(torch.ones_like(similarity_matrix), diagonal=1).bool()
+#             pairwise_similarities = similarity_matrix[mask]
+#             total_diversity += 1 - torch.mean(pairwise_similarities).item()
+
+#             # Sample size
+#             batch_size = cosine_sim_comb.shape[0]
+#             total_samples += batch_size

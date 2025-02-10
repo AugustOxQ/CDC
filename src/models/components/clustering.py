@@ -12,6 +12,7 @@ from cuml.datasets import make_blobs
 from cuml.manifold import UMAP
 from dask.distributed import Client
 from dask_cuda import LocalCUDACluster
+from scipy import cluster
 from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -92,7 +93,11 @@ class Clustering:
         self.initialize_cluster()
 
         umap_features_np = umap_features.cpu().numpy()
-        hdbscan_model = HDBSCAN(min_samples=10, min_cluster_size=500)
+        hdbscan_model = HDBSCAN(
+            min_cluster_size=100,
+            min_samples=10,
+            cluster_selection_method="leaf",
+        )
         hdbscan_model.fit(umap_features_np)
         umap_labels = hdbscan_model.labels_
 

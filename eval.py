@@ -79,8 +79,8 @@ def inference_test(
     Ks=[1, 5, 10],
     top_k=5,
 ):
-    # Load unique label embeddings up to 50
-    label_embeddings = label_embeddings[:50]
+    # Load unique label embeddings up to a reasonable number of labels
+    label_embeddings = label_embeddings[:300]
 
     total_samples = 0
     total_better_count = 0
