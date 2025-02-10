@@ -70,7 +70,14 @@ def retrieve_top_k(image_embeddings, text_embeddings, top_k=5):
 
 
 def inference_test(
-    model, tokenizer, dataloader, label_embeddings, device, epoch=0, Ks=[1, 5, 10], top_k=5
+    model,
+    tokenizer,
+    dataloader,
+    label_embeddings,
+    device,
+    epoch=0,
+    Ks=[1, 5, 10],
+    top_k=5,
 ):
     # Load unique label embeddings up to 50
     label_embeddings = label_embeddings[:50]
@@ -151,7 +158,8 @@ def inference_test(
                 top_k_text_indices, top_k_image_indices = retrieve_top_k(img_emb, comb_emb, 10)
 
                 torch.save(
-                    top_k_text_indices, f"other/retrieval_res/top_k_text_indices_{label_indice}.pt"
+                    top_k_text_indices,
+                    f"other/retrieval_res/top_k_text_indices_{label_indice}.pt",
                 )
                 torch.save(
                     top_k_image_indices,
@@ -265,7 +273,7 @@ def run(cfg: DictConfig, **kwargs):
 
     print(f"Loading model from {model_path}")
     model = CDC()
-    model.load_state_dict(torch.load(model_path))
+    model.load_state_dict(torch.load(model_path, weights_only=False))
     model = model.to(device)
     preprocess = AutoImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
     tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
@@ -276,7 +284,9 @@ def run(cfg: DictConfig, **kwargs):
 
     # Load FeatureManager
     feature_manager = FeatureManager(cfg.dataset.extract_path, chunk_size=cfg.train.batch_size)
-    sample_ids_list = torch.load(os.path.join(cfg.dataset.extract_path, "sample_ids_list.pt"))
+    sample_ids_list = torch.load(
+        os.path.join(cfg.dataset.extract_path, "sample_ids_list.pt"), weights_only=False
+    )
     feature_manager.load_features()
 
     # Load EmbeddingManager
@@ -313,7 +323,7 @@ def run(cfg: DictConfig, **kwargs):
     # unique_embeddings, _ = torch.unique(
     #     label_embedding, return_inverse=True, dim=0
     # )
-    unique_embeddings = torch.load(unique_embeddings_path)
+    unique_embeddings = torch.load(unique_embeddings_path, weights_only=False)
     print(f"Unique embeddings: {unique_embeddings.size(0)}")
 
     print("Starting inference test")

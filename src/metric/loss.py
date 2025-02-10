@@ -231,8 +231,7 @@ class LabelContrastiveLoss(nn.Module):
 # TODO: Implement a classifier that choose labels during training, for example, to do concatenation of image, text and label embeddings.
 
 
-def main():
-    ...
+def main(): ...
 
 
 if __name__ == "__main__":

@@ -215,7 +215,10 @@ def run(cfg: DictConfig, **kwargs):
         )
     else:
         print("##########Loading pre-extracted features##########")
-        sample_ids_list = torch.load(os.path.join(cfg.dataset.extract_path, "sample_ids_list.pt"))
+        sample_ids_list = torch.load(
+            os.path.join(cfg.dataset.extract_path, "sample_ids_list.pt"),
+            weights_only=False,
+        )
         # turn sample_ids_list into a list of integers
         feature_manager.load_features()
 
@@ -574,7 +577,7 @@ def run(cfg: DictConfig, **kwargs):
     return logger
 
 
-@hydra.main(config_path="configs", config_name="redcaps", version_base=None)
+@hydra.main(config_path="configs", config_name="flickr30k_mini", version_base=None)
 def main(cfg):
     # Set seed
     seed = cfg.seed

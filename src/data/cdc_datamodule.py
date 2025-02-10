@@ -60,7 +60,7 @@ class FeatureExtractionDataset(Dataset):
 
         raw_text = (
             self.annotations[idx]["caption"]
-            if type(self.annotations[idx]["caption"]) == str
+            if type(self.annotations[idx]["caption"]) is str
             else self.annotations[idx]["caption"][0]
         )
 
@@ -197,7 +197,7 @@ class CDC_test(Dataset):
         self.annotations = self.annotations[: int(len(self.annotations) * ratio)]
         self.image_path = image_path
         self.processor = processor
-        self.captions_per_image = 1 if type(self.annotations[0]["caption"]) == str else 5
+        self.captions_per_image = 1 if type(self.annotations[0]["caption"]) is str else 5
         print(f"Captions per image: {self.captions_per_image}")
 
     def __len__(self):
@@ -213,7 +213,7 @@ class CDC_test(Dataset):
 
         raw_text = (
             self.annotations[idx]["caption"]
-            if type(self.annotations[idx]["caption"]) == str
+            if type(self.annotations[idx]["caption"]) is str
             else self.annotations[idx]["caption"][:5]
         )
 

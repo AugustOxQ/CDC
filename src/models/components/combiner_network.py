@@ -165,7 +165,7 @@ class Combiner_basic_low(nn.Module):
         hidden_dim: int = 512,
         num_heads: int = 8,
         num_layers: int = 4,
-        label_dim: int = 32,
+        label_dim: int = 512,
     ) -> None:
         """
         :param clip_feature_dim: CLIP input feature dimension (e.g., 512)

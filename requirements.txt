@@ -26,21 +26,43 @@ hydra-optuna-sweeper
 salesforce-lavis
 open_clip_torch
 peft
+dask-cuda
+# CUml see https://docs.rapids.ai/install/
 
 # --------- loggers --------- #
-wandb
+wandb          # for logging
 
 # --------- others --------- #
 pyrootutils     # standardizing the project root setup
 pre-commit      # hooks for applying linters on commit
 rich            # beautiful text formatting in terminal
 pytest          # tests
-sh            # for running bash commands in some tests (linux/macos only)
-h5py
-filelock
+sh              # for running bash commands in some tests (linux/macos only)
+h5py            # for datasets
+filelock        # for datasets
+geoopt          # for Riemannian optimization
+auto_mix_prep   # for data preparation
+pipreqs        # for generating requirements.txt
 
 # --------- jupyter --------- #
 ipykernel       # for jupyter notebook
 jupyter         # for jupyter notebook
-pyqt5
-pyqtwebengine
+pyqt5           # for jupyter notebook
+pyqtwebengine   # for jupyter notebook
+
+
+# --------- URL --------- #
+# --extra-index-url=https://pypi.nvidia.com
+# cudf-cu12==24.12.*
+# dask-cudf-cu12==24.12.*
+# cuml-cu12==24.12.*
+# cugraph-cu12==24.12.*
+# nx-cugraph-cu12==24.12.*
+# cuspatial-cu12==24.12.*
+# cuproj-cu12==24.12.*
+# cuxfilter-cu12==24.12.*
+# cucim-cu12==24.12.*
+# pylibraft-cu12==24.12.*
+# raft-dask-cu12==24.12.*
+# cuvs-cu12==24.12.*
+# nx-cugraph-cu12==24.12.*

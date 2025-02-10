@@ -43,7 +43,7 @@ class FeatureManager:
         chunk_file = os.path.join(self.features_dir, f"chunk_{chunk_id}.pt")
         if not os.path.exists(chunk_file):
             raise FileNotFoundError(f"Chunk file {chunk_file} not found.")
-        return torch.load(chunk_file)
+        return torch.load(chunk_file, weights_only=False)
 
     def _get_chunk_file_and_idx(self, sample_id):
         chunk_idx = sample_id % self.chunk_size
@@ -116,7 +116,7 @@ class EmbeddingManager:
             if file_name.endswith(".pt"):
                 chunk_file = os.path.join(self.embeddings_dir, file_name)
                 self.chunk_files.append(chunk_file)
-                embeddings = torch.load(chunk_file)
+                embeddings = torch.load(chunk_file, weights_only=False)
                 for sample_id in embeddings.keys():
                     self.index_mapping[sample_id] = (chunk_file, sample_id)
                     self.embedding_references[sample_id] = sample_id
@@ -126,7 +126,7 @@ class EmbeddingManager:
         chunk_file = os.path.join(self.embeddings_dir, f"embeddings_{chunk_id}.pt")
         if not os.path.exists(chunk_file):
             raise FileNotFoundError(f"Chunk file {chunk_file} not found.")
-        all_embeddings = torch.load(chunk_file)
+        all_embeddings = torch.load(chunk_file, weights_only=False)
 
         sample_ids = all_embeddings.keys()
         label_embeddings = [all_embeddings[sample_id] for sample_id in sample_ids]
@@ -140,7 +140,7 @@ class EmbeddingManager:
         if not os.path.exists(chunk_file):
             raise FileNotFoundError(f"Chunk file {chunk_file} not found.")
 
-        embeddings = torch.load(chunk_file)
+        embeddings = torch.load(chunk_file, weights_only=False)
         sample_ids = [int(sample_id) for sample_id in sample_ids]
 
         # check sample_ids are in embeddings.keys()

@@ -1,5 +1,6 @@
 from src.utils.evaltools import (
     compute_metric_difference,
+    eval_rank_oracle,
     evalrank_all,
     evalrank_i2t,
     evalrank_t2i,
@@ -9,8 +10,6 @@ from src.utils.inference import (
     extract_and_store_features,
     inference_test,
     inference_train,
-    oracle_test_itt,
-    oracle_test_tti,
     random_sample_with_replacement,
     sample_label_embeddings,
 )
