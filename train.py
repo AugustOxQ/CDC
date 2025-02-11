@@ -313,6 +313,7 @@ def run(cfg: DictConfig, **kwargs):
     second_stage_n = cfg.train_2.second_stage_n  # Number of clusters after second stage
     k_means_start_epoch = cfg.train_2.k_means_start_epoch  # Start k-means clustering
     k_means_middle_epoch = cfg.train_2.k_means_middle_epoch  # Start slow k-means clustering
+    alpha_upper = cfg.train_2.alpha_upper  # Upper bound for alpha
     k_means_end_epoch = cfg.train_2.k_means_end_epoch  # End k-means clustering
     update_label_embedding = True  # Update label embeddings during training
     high_lr = True
@@ -411,7 +412,10 @@ def run(cfg: DictConfig, **kwargs):
             n_clusters = n_clusters_list[epoch]  # Number of clusters for the current epoch
             # An adaptive alpha which minimum 0.1 and maximum 0.9, slide depends on k_means_middle_epoch - k_means_start_epoch
             alpha = max(
-                min((1 - (k_means_middle_epoch - epoch) / k_means_middle_epoch), 0.85),
+                min(
+                    (1 - (k_means_middle_epoch - epoch) / k_means_middle_epoch),
+                    alpha_upper,
+                ),
                 0.01,
             )
 

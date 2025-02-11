@@ -94,9 +94,9 @@ class Clustering:
 
         umap_features_np = umap_features.cpu().numpy()
         hdbscan_model = HDBSCAN(
-            min_cluster_size=100,
+            min_cluster_size=50,
             min_samples=10,
-            cluster_selection_method="leaf",
+            cluster_selection_method="leaf",  # https://docs.rapids.ai/api/cuml/stable/api/#hdbscan
         )
         hdbscan_model.fit(umap_features_np)
         umap_labels = hdbscan_model.labels_

@@ -488,7 +488,9 @@ def eval_rank_oracle(
     best_rank_tti = torch.full((num_text,), math.inf)
 
     best_inds_itt = None
-    best_rank_itt = torch.full((num_image,), math.inf)
+    best_rank_itt = torch.full(
+        (num_image,), math.inf
+    )  # TODO: Mind this to be num_text and compute the actual abs rank instead abs mean rank
 
     with torch.no_grad():
         for label_id in tqdm(range(num_labels)):
@@ -530,7 +532,10 @@ def eval_rank_oracle(
             abs_rank_itt = torch.tensor(abs_rank_itt, dtype=torch.float32).cpu()
 
             # Sum of ranks per 5 captions, that is sum index i*5 : i*5+5 for each image
-            abs_rank_itt = abs_rank_itt.view(-1, captions_per_image).sum(dim=1)
+            abs_rank_itt_min = abs_rank_itt.view(-1, captions_per_image).min(dim=1).values
+            abs_rank_itt_sum = abs_rank_itt.view(-1, captions_per_image).sum(dim=1)
+
+            abs_rank_itt = abs_rank_itt_sum + abs_rank_itt_min
 
             if best_inds_itt is None:
                 best_inds_itt = inds_itt.clone()

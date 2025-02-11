@@ -275,6 +275,7 @@ def inference_train(model, dataloader, device, epoch=0, Ks=[1, 5, 10], max_batch
     }
 
 
+@torch.no_grad()
 def inference_test(model, processor, dataloader, label_embeddings, epoch, device):
     # Load unique label embeddings up to 300
     label_embeddings = label_embeddings[:300]
@@ -389,7 +390,7 @@ def inference_test(model, processor, dataloader, label_embeddings, epoch, device
     return metrics_total
 
 
-@hydra.main(config_path="configs", config_name="flickr30k_mini", version_base=None)
+@hydra.main(config_path="configs", config_name="flickr30k", version_base=None)
 def test(cfg: DictConfig):
     from src.models.cdc import CDC
 
@@ -416,10 +417,9 @@ def test(cfg: DictConfig):
         num_workers=cfg.train.num_workers,
     )
 
-    # Randomly generate label_embeddings of size [50, 512]
-    label_embeddings = torch.randn(50, 32, dtype=torch.float32, device=device)
-
     for r in range(3):
+        # Randomly generate label_embeddings of size [50, 512]
+        label_embeddings = torch.randn(87, 32, dtype=torch.float32, device=device)
         inference_test(
             model,
             processor,
@@ -430,7 +430,7 @@ def test(cfg: DictConfig):
         )
 
 
-@hydra.main(config_path="../../configs", config_name="flickr30k_mini", version_base=None)
+@hydra.main(config_path="../../configs", config_name="flickr30k", version_base=None)
 def main(cfg):
     test(cfg)
 
