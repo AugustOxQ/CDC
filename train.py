@@ -9,14 +9,13 @@ import hydra
 import numpy as np
 import torch
 import transformers
+import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer
-
-import wandb
 
 # Import local packages
 from src.data.cdc_datamodule import CDC_test
@@ -384,22 +383,7 @@ def run(cfg: DictConfig, **kwargs):
             logger_epoch["inference_train"] = inf_train_log
 
         if cfg.control.test:
-            if unique_embeddings is not None:  # and epoch >= k_means_middle_epoch:
-                # if update_label_embedding is True:
-                #     print("##########Adaptation before testing##########")
-                #     _ = train(
-                #         cfg,
-                #         model=model,
-                #         train_dataloader=train_dataloader,
-                #         epoch=epoch,
-                #         criteria=criteria,
-                #         optimizer=optimizer_tmp,
-                #         embedding_manager=embedding_manager,
-                #         update_label_embedding=False,
-                #         high_lr=False,
-                #         scheduler=None,
-                #         wandb_run=wandb_run,
-                #     )
+            if unique_embeddings is not None:
 
                 print("##########Testing test dataset##########")
                 inf_test_log = inference_test(
@@ -464,8 +448,9 @@ def run(cfg: DictConfig, **kwargs):
                     update_noise=update_noise,
                 )
 
-                # Find unique embeddings
+                # Find unique embeddings, and return the indices of the unique embeddings according to the descending order of the size of the cluster
                 unique_embeddings, _ = torch.unique(updated_embeddings, return_inverse=True, dim=0)
+
                 print(f"Unique embeddings after clustering update: {unique_embeddings.size(0)}")
 
                 # Check how many embeddings have been updated by k-means
@@ -540,14 +525,18 @@ def run(cfg: DictConfig, **kwargs):
                     }
                 )
 
-                # Save unique embeddings
+                # Find unique labels and their counts
+                unique_labels_save, counts = torch.unique(updated_embeddings, return_counts=True)
+                # Sort unique labels by descending count
+                sorted_indices = torch.argsort(counts, descending=True)
+                unique_labels_save = unique_labels_save[sorted_indices]
+                if unique_labels_save.size(0) > 1000:
+                    unique_labels_save = cluster_centers
+
                 torch.save(
-                    unique_embeddings[:300],  # Increase the number of embeddings to save to 300
+                    unique_labels_save[:1000],  # Increase the number of embeddings to save to 300
                     os.path.join(experiment_dir, "unique_embeddings.pt"),
                 )
-
-                if unique_embeddings.size(0) > 300:
-                    unique_embeddings = cluster_centers
 
             elif epoch >= k_means_middle_epoch:
                 print("##########No clustering##########")

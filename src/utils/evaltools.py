@@ -9,6 +9,7 @@ import transformers
 from numpy import ndarray
 from PIL import Image
 from shapely import contains
+from sqlalchemy import all_
 from torch import Tensor
 from torch.nn import Module
 from torch.utils.data import DataLoader, Dataset
@@ -360,6 +361,71 @@ def evalrank_t2i(
     return metrics
 
 
+def compute_recall_metrics(
+    best_inds_tti,
+    best_inds_itt,
+    text_to_image_map,
+    image_to_text_map,
+    k_vals,
+    num_text,
+    num_image,
+    captions_per_image,
+):
+    # text-to-image recall
+    best_inds_tti = best_inds_tti.to(device)  # type: ignore
+
+    text_to_image_recall = []
+
+    for k in k_vals:
+        # Extract top k indices only
+        topk = best_inds_tti[:, :k]
+
+        # Correct iff one of the top_k values equals the correct image (as given by text_to_image_map)
+        correct = torch.eq(topk, text_to_image_map.unsqueeze(-1)).any(dim=1)
+
+        num_correct = correct.sum().item()
+        text_to_image_recall.append(num_correct / num_text * 100)
+
+    meanR_t2i, medR_t2i, mAP_t2i = calculate_metrics(best_inds_tti, text_to_image_map, 1)
+
+    # image-to-text recall
+    best_inds_itt = best_inds_itt.to(device)  # type: ignore
+
+    image_to_text_recall = []
+
+    for k in k_vals:
+        # Extract top k indices only
+        topk = best_inds_itt[:, :k]
+
+        correct = torch.zeros((num_image,), dtype=torch.bool).cuda()
+
+        #  For each image, check whether one of the 5 relevant captions was retrieved
+        # Check if image matches its ith caption (for i=0..4)
+        for i in range(captions_per_image):
+            contains_index = torch.eq(topk, image_to_text_map[:, i].unsqueeze(-1)).any(dim=1)
+            correct = torch.logical_or(correct, contains_index)
+
+        num_correct = correct.sum().item()
+        image_to_text_recall.append(num_correct / num_image * 100)  #
+
+    meanR_i2t, medR_i2t, mAP_i2t = calculate_metrics(
+        best_inds_itt, image_to_text_map, captions_per_image
+    )
+
+    torch.cuda.empty_cache()
+
+    return (
+        text_to_image_recall,
+        meanR_t2i,
+        medR_t2i,
+        mAP_t2i,
+        image_to_text_recall,
+        meanR_i2t,
+        medR_i2t,
+        mAP_i2t,
+    )
+
+
 def evalrank_all(
     image_embeddings,
     text_embeddings,
@@ -468,6 +534,7 @@ def eval_rank_oracle(
     text_to_image_map,
     image_to_text_map,
     kwd: str = "",
+    use_best_label: bool = True,
 ):
     model.eval()
 
@@ -483,6 +550,7 @@ def eval_rank_oracle(
     all_txt_emb = all_txt_emb.to(device)
     all_txt_full = all_txt_full.to(device)
 
+    # BEST RANKING
     # looping over all labels
     best_inds_tti = None  # (n_text, n_image)
     best_rank_tti = torch.full((num_text,), math.inf)
@@ -492,18 +560,45 @@ def eval_rank_oracle(
         (num_image,), math.inf
     )  # TODO: Mind this to be num_text and compute the actual abs rank instead abs mean rank
 
-    with torch.no_grad():
-        for label_id in tqdm(range(num_labels)):
-            label_emb = label_embeddings[label_id]
-            # broadcast to the same length as all_txt_emb
-            label_emb = label_emb.expand(num_text, -1)
-            label_emb = label_emb.to(device)
+    # Add a record of which label is finally used for each text
+    best_label_tti = -1 * torch.ones((num_text,))
+    best_label_itt = -1 * torch.ones((num_image,))
 
-            tmp_comb_emb = model.module.combine(all_txt_emb, all_txt_full, label_emb).detach()
-            tmp_comb_emb /= tmp_comb_emb.norm(dim=-1, keepdim=True)
+    # First RANKING
+    first_inds_tti = None  # (n_text, n_image)
+    first_rank_tti = torch.full((num_text,), math.inf)
+
+    first_inds_itt = None
+    first_rank_itt = torch.full((num_image,), math.inf)
+
+    # Add a record of which label is first used for each text
+    first_label_tti = -1 * torch.ones((num_text,))
+    first_label_itt = -1 * torch.ones((num_image,))
+
+    print("Evaluating the best label")
+    with torch.no_grad():
+        for label_id in tqdm(range(-1, num_labels)):
+            if label_id == -1:
+                comb_embds = all_txt_emb.detach().clone()
+            else:
+                label_emb = label_embeddings[label_id]
+                # broadcast to the same length as all_txt_emb
+                label_emb = label_emb.expand(num_text, -1)
+                label_emb = label_emb.to(device)
+                batch_size = 256
+                comb_embs = []
+                for i in range(0, num_text, batch_size):
+                    tmp_comb_embeds = model.module.combine(
+                        all_txt_emb[i : i + batch_size],
+                        all_txt_full[i : i + batch_size],
+                        label_emb[i : i + batch_size],
+                    ).detach()
+                    comb_embs.append(tmp_comb_embeds)
+                comb_embds = torch.cat(comb_embs, dim=0)
+            comb_embds /= comb_embds.norm(dim=-1, keepdim=True)
 
             # text-to-image
-            dist_matrix_tti = tmp_comb_emb @ all_img_emb.T
+            dist_matrix_tti = comb_embds @ all_img_emb.T
             dist_matrix_tti = dist_matrix_tti.cpu()
             inds_tti = torch.argsort(dist_matrix_tti, dim=1, descending=True)
 
@@ -514,6 +609,8 @@ def eval_rank_oracle(
             if best_inds_tti is None:
                 best_inds_tti = inds_tti.clone()
                 best_rank_tti = abs_rank_tti.clone()
+                first_inds_tti = inds_tti.clone()
+                first_rank_tti = abs_rank_tti.clone()
                 update_mask = torch.ones((num_text,), dtype=torch.bool)
             else:
                 # For each query, if the current ranking can recall the correct image and the previous one cannot, update
@@ -521,6 +618,14 @@ def eval_rank_oracle(
                 if update_mask.any():
                     best_inds_tti[update_mask] = inds_tti[update_mask]
                     best_rank_tti[update_mask] = abs_rank_tti[update_mask]
+                    best_label_tti[update_mask] = label_id
+
+                update_mask_first = first_label_tti == -1
+                hybrid_mask = update_mask & update_mask_first
+                if hybrid_mask.any():
+                    first_inds_tti[hybrid_mask] = inds_tti[hybrid_mask]  # type: ignore
+                    first_rank_tti[hybrid_mask] = abs_rank_tti[hybrid_mask]
+                    first_label_tti[hybrid_mask] = label_id
 
             # image-to-text
             dist_matrix_itt = dist_matrix_tti.T
@@ -540,6 +645,8 @@ def eval_rank_oracle(
             if best_inds_itt is None:
                 best_inds_itt = inds_itt.clone()
                 best_rank_itt = abs_rank_itt.clone()
+                first_inds_itt = inds_itt.clone()
+                first_rank_itt = abs_rank_itt.clone()
                 update_mask = torch.ones((num_image,), dtype=torch.bool)
             else:
                 # For each query, if the current ranking can recall the correct image and the previous one cannot, update
@@ -547,56 +654,69 @@ def eval_rank_oracle(
                 if update_mask.any():
                     best_inds_itt[update_mask] = inds_itt[update_mask]
                     best_rank_itt[update_mask] = abs_rank_itt[update_mask]
+                    best_label_itt[update_mask] = label_id
 
-            tmp_comb_emb.cpu()
-            del tmp_comb_emb
+                update_mask_first = first_label_itt == -1
+                hybrid_mask = update_mask & update_mask_first
+                if hybrid_mask.any():
+                    first_inds_itt[hybrid_mask] = inds_itt[hybrid_mask]  # type: ignore
+                    first_rank_itt[hybrid_mask] = abs_rank_itt[hybrid_mask]
+                    first_label_itt[hybrid_mask] = label_id
+
+            # Compute raw rank
+            dist_matrix_raw_tti = comb_embds @ all_img_emb.T
+            dist_matrix_raw_tti = dist_matrix_raw_tti.cpu()
+            inds_raw_tti = torch.argsort(dist_matrix_raw_tti, dim=1, descending=True)
+
+            dist_matrix_raw_itt = dist_matrix_raw_tti.T
+            dist_matrix_raw_itt = dist_matrix_raw_itt.cpu()
+            inds_raw_itt = torch.argsort(dist_matrix_raw_itt, dim=1, descending=True)
+
+            comb_embds.cpu()
+            del comb_embds
 
             torch.cuda.empty_cache()
 
-    # text-to-image recall
-    # print("Text-to-image recall...")
-    best_inds_tti = best_inds_tti.to(device)  # type: ignore
-
-    text_to_image_recall = []
-
-    for k in k_vals:
-        # Extract top k indices only
-        topk = best_inds_tti[:, :k]
-
-        # Correct iff one of the top_k values equals the correct image (as given by text_to_image_map)
-        correct = torch.eq(topk, text_to_image_map.unsqueeze(-1)).any(dim=1)
-
-        num_correct = correct.sum().item()
-        text_to_image_recall.append(num_correct / num_text * 100)
-
-    meanR_t2i, medR_t2i, mAP_t2i = calculate_metrics(best_inds_tti, text_to_image_map, 1)
-
-    # image-to-text recall
-    # print("Image-to-text recall...")
-    best_inds_itt = best_inds_itt.to(device)  # type: ignore
-
-    image_to_text_recall = []
-
-    for k in k_vals:
-        # Extract top k indices only
-        topk = best_inds_itt[:, :k]
-
-        correct = torch.zeros((num_image,), dtype=torch.bool).cuda()
-
-        #  For each image, check whether one of the 5 relevant captions was retrieved
-        # Check if image matches its ith caption (for i=0..4)
-        for i in range(captions_per_image):
-            contains_index = torch.eq(topk, image_to_text_map[:, i].unsqueeze(-1)).any(dim=1)
-            correct = torch.logical_or(correct, contains_index)
-
-        num_correct = correct.sum().item()
-        image_to_text_recall.append(num_correct / num_image * 100)  #
-
-    meanR_i2t, medR_i2t, mAP_i2t = calculate_metrics(
-        best_inds_itt, image_to_text_map, captions_per_image
-    )
-
-    torch.cuda.empty_cache()
+    if use_best_label:
+        (
+            text_to_image_recall,
+            meanR_t2i,
+            medR_t2i,
+            mAP_t2i,
+            image_to_text_recall,
+            meanR_i2t,
+            medR_i2t,
+            mAP_i2t,
+        ) = compute_recall_metrics(
+            best_inds_tti,
+            best_inds_itt,
+            text_to_image_map,
+            image_to_text_map,
+            k_vals,
+            num_text,
+            num_image,
+            captions_per_image,
+        )
+    else:
+        (
+            text_to_image_recall,
+            meanR_t2i,
+            medR_t2i,
+            mAP_t2i,
+            image_to_text_recall,
+            meanR_i2t,
+            medR_i2t,
+            mAP_i2t,
+        ) = compute_recall_metrics(
+            first_inds_tti,
+            first_inds_itt,
+            text_to_image_map,
+            image_to_text_map,
+            k_vals,
+            num_text,
+            num_image,
+            captions_per_image,
+        )
 
     # print("Done.")
     metrics = {
@@ -621,7 +741,196 @@ def eval_rank_oracle(
         print(f"{key}: {value}")
     print(f"############end-{kwd}#########################\n")
 
-    return metrics
+    if use_best_label:
+        return metrics, best_label_tti, best_label_itt, inds_raw_tti, inds_raw_itt
+    else:
+        return metrics, first_label_tti, first_label_itt, inds_raw_tti, inds_raw_itt
+
+
+def eval_rank_oracle_check(
+    model,
+    label_embeddings,  # shape: (N_label, label_dim)
+    all_img_emb,  # shape: (N_img, emb_dim)
+    all_txt_emb,  # shape: (N_txt, txt_emb_dim)
+    all_txt_full,  # shape: (N_txt, other_dim)  额外文本信息
+    text_to_image_map,
+    image_to_text_map,
+    best_label_tti,
+    best_label_itt,
+):
+    model.eval()
+
+    res = {}
+
+    # Moving to GPU
+    all_img_emb /= all_img_emb.norm(dim=-1, keepdim=True)
+    all_img_emb = all_img_emb.to(device)
+    all_txt_emb = all_txt_emb.to(device)
+    all_txt_full = all_txt_full.to(device)
+
+    captions_per_image = image_to_text_map.shape[1]
+
+    comb_emb_itt = all_txt_emb.clone()
+    # repeat the best label for each text the number of times it is used
+    best_label_itt = best_label_itt.repeat_interleave(captions_per_image)
+    valid_mask_itt = best_label_itt != -1  # Those which actually use label embeddings
+    valid_indices_itt = best_label_itt[
+        valid_mask_itt
+    ].int()  # The label indices used for each text
+
+    selected_labels_itt = label_embeddings[valid_indices_itt].to(device)
+
+    with torch.no_grad():
+        # batch processing #TODO Add batch processing method
+        comb_embs = model.module.combine(
+            all_txt_emb[valid_mask_itt],
+            all_txt_full[valid_mask_itt],
+            selected_labels_itt,
+        ).detach()
+
+    comb_emb_itt[valid_mask_itt] = comb_embs
+
+    all_txt_emb /= all_txt_emb.norm(dim=-1, keepdim=True)
+    comb_emb_normed = comb_emb_itt / comb_emb_itt.norm(dim=-1, keepdim=True)
+    # get similarity matrix
+    dist_matrix_raw = all_txt_emb @ all_img_emb.T
+    dist_matrix_raw = dist_matrix_raw.cpu()
+
+    dist_matrix_itt = comb_emb_normed @ all_img_emb.T
+    dist_matrix_itt = dist_matrix_itt.cpu()
+
+    # Compare the difference between the two similarity matrices
+    diff = dist_matrix_raw - dist_matrix_itt
+    diff = diff.abs().mean().item()
+
+    print(f"Sum of the absolute difference between the two similarity matrices: {diff}")
+
+    # Compare the corresponding difference between comb_emb_normed and all_txt_emb
+    diff = comb_emb_normed - all_txt_emb
+    diff = diff.abs().mean().item()
+
+    print(f"Sum of the absolute difference between comb_emb_normed and all_txt_emb: {diff}")
+
+    return comb_emb_itt.cpu()
+
+
+def eval_rank_oracle_check_per_label(
+    model,
+    label_embeddings,  # shape: (N_label, label_dim)
+    all_img_emb,  # shape: (N_img, emb_dim)
+    all_txt_emb,  # shape: (N_txt, txt_emb_dim)
+    all_txt_full,  # shape: (N_txt, other_dim)  额外文本信息
+    text_to_image_map,
+    image_to_text_map,
+    inds_raw_tti,
+    inds_raw_itt,
+):
+    """
+    Evaluate image-to-text recall (and other metrics) using only the given label embedding.
+
+    Args:
+        model: The model to evaluate.
+        label_embeddings: The label embeddings to use. Shape: (N_label, label_dim).
+        all_img_emb: The image embeddings to use. Shape: (N_img, emb_dim).
+        all_txt_emb: The text embeddings to use. Shape: (N_txt, txt_emb_dim).
+        all_txt_full: The extra text information to use. Shape: (N_txt, other_dim).
+        image_to_text_map: A 2D tensor mapping each image index to its corresponding text indices.
+        text_to_image_map: A 2D tensor mapping each text index to its corresponding image indices.
+        best_label_tti: The best label indices to use for text-to-image.
+        best_label_itt: The best label indices to use for image-to-text.
+        label_emb_index: The index of the label embedding to use. Default: 0.
+
+    Returns:
+        A tuple containing the combined embeddings and the sorted indices for image-to-text retrieval.
+    """
+    model.eval()
+
+    num_im = all_img_emb.shape[0]  # type: ignore
+    num_text = all_txt_emb.shape[0]
+
+    # Moving to GPU
+    all_txt_emb = all_txt_emb.to(device)
+    all_txt_full = all_txt_full.to(device)
+
+    captions_per_image = image_to_text_map.shape[1]
+
+    with torch.no_grad():
+        batch_size = 1024
+        comb_emb = []
+        for i in range(0, num_text, batch_size):
+            min(batch_size, num_text - i)
+            label_emb = label_embeddings.expand(num_text, -1)
+            label_emb = label_emb.to(device)
+            tmp_comb_embeds = model.module.combine(
+                all_txt_emb[i : i + batch_size],
+                all_txt_full[i : i + batch_size],
+                label_emb[i : i + batch_size],
+            ).detach()
+            comb_emb.append(tmp_comb_embeds)
+        comb_emb = torch.cat(comb_emb, dim=0)
+
+    # Normalize embeddings
+    all_img_emb /= all_img_emb.norm(dim=-1, keepdim=True)
+    all_img_emb = all_img_emb.to(device)
+    all_txt_emb /= all_txt_emb.norm(dim=-1, keepdim=True)
+    comb_emb_normed = comb_emb / comb_emb.norm(dim=-1, keepdim=True)
+
+    # tti part
+
+    # Get tti similarity matrix
+    dist_matrix_tti = comb_emb @ all_img_emb.T
+    dist_matrix_tti = dist_matrix_tti.cpu()
+
+    # Sort in descending order; first is the biggest logit
+    inds_tti = torch.argsort(dist_matrix_tti, dim=1, descending=True)
+
+    # Calculate absolute ranking
+    abs_rank_tti = absolute_rank(inds_tti, text_to_image_map, 1)
+    abs_rank_tti = torch.tensor(abs_rank_tti, dtype=torch.float32).cpu()
+
+    abs_rank_tti_raw = absolute_rank(inds_raw_tti, text_to_image_map, 1)
+    abs_rank_tti_raw = torch.tensor(abs_rank_tti_raw, dtype=torch.float32).cpu()
+
+    # Check of which element the combined embedding is better than raw
+    mask_tti = abs_rank_tti < abs_rank_tti_raw
+
+    # itt part
+    # Get iit similarity matrix
+    dist_matrix_itt = dist_matrix_tti.T
+    dist_matrix_itt = dist_matrix_itt.cpu()
+
+    # Sort in descending order; first is the biggest logit
+    inds_itt = torch.argsort(dist_matrix_itt, dim=1, descending=True)
+
+    # Calculate absolute ranking
+    abs_rank_itt = absolute_rank(inds_itt, image_to_text_map, captions_per_image)
+    abs_rank_itt = torch.tensor(abs_rank_itt, dtype=torch.float32).cpu()
+
+    # Sum of ranks per 5 captions, that is sum index i*5 : i*5+5 for each image
+    abs_rank_itt_min = abs_rank_itt.view(-1, captions_per_image).min(dim=1).values
+    abs_rank_itt_sum = abs_rank_itt.view(-1, captions_per_image).sum(dim=1)
+
+    abs_rank_itt = abs_rank_itt_sum + abs_rank_itt_min
+
+    # Calculate absolute ranking raw
+    abs_rank_itt_raw = absolute_rank(inds_raw_itt, image_to_text_map, captions_per_image)
+    abs_rank_itt_raw = torch.tensor(abs_rank_itt_raw, dtype=torch.float32).cpu()
+
+    abs_rank_itt_min_raw = abs_rank_itt_raw.view(-1, captions_per_image).min(dim=1).values
+    abs_rank_itt_sum_raw = abs_rank_itt_raw.view(-1, captions_per_image).sum(dim=1)
+
+    abs_rank_itt_raw = abs_rank_itt_sum_raw + abs_rank_itt_min_raw
+
+    # Check of which element the combined embedding is better than raw
+    mask_itt = abs_rank_itt < abs_rank_itt_raw
+
+    return (
+        comb_emb.cpu(),
+        inds_tti,
+        mask_tti,
+        inds_itt,
+        mask_itt,
+    )
 
 
 def main(): ...
@@ -629,79 +938,3 @@ def main(): ...
 
 if __name__ == "__main__":
     main()
-
-    # # looping over all labels
-    # best_inds_tti = None  # 形状 (n_text, n_image)
-    # best_correct_tti = torch.full((num_text,), math.inf)
-
-    # best_inds_itt = None
-    # best_correct_itt = torch.full((num_image,), math.inf)
-
-    # for label_id in tqdm(range(num_labels)):
-    #     label_emb = label_embeddings[label_id]
-    #     # broadcast to the same length as all_txt_emb
-    #     label_emb = label_emb.expand(num_text, -1)
-    #     label_emb = label_emb.to(device)
-    #     tmp_comb_emb = model.module.combine(
-    #         all_txt_emb.to(device), all_txt_full.to(device), label_emb
-    #     )
-    #     tmp_comb_emb /= tmp_comb_emb.norm(dim=-1, keepdim=True)
-
-    #     # text-to-image
-    #     dist_matrix_tti = tmp_comb_emb @ all_img_emb.T
-    #     dist_matrix_tti = dist_matrix_tti.cpu()
-    #     inds_tti = torch.argsort(dist_matrix_tti, dim=1, descending=True)
-
-    #     # 计算当前排序的 Recall@10
-    #     current_topk = inds_tti.to(device)[:, :1]
-    #     # 假设 text_to_image_map 为每个文本的正确图像索引，扩展后逐行比较
-    #     current_correct = torch.eq(current_topk, text_to_image_map.unsqueeze(-1)).any(
-    #         dim=1
-    #     )
-    #     current_correct = current_correct.cpu()
-
-    #     # 如果还没有初始化最佳排序，则直接赋值
-    #     if best_inds_tti is None:
-    #         best_inds_tti = inds_tti.clone()
-    #         best_correct_tti = current_correct.clone()
-    #     else:
-    #         # 对于每个 query，如果当前排序能召回正确图像而之前未召回，则更新
-    #         update_mask = current_correct & (~best_correct_tti)
-    #         if update_mask.any():
-    #             best_inds_tti[update_mask] = inds_tti[update_mask]
-    #             best_correct_tti[update_mask] = current_correct[update_mask]
-
-    #     # image-to-text
-    #     dist_matrix_itt = dist_matrix_tti.T
-    #     dist_matrix_itt = dist_matrix_itt.cpu()
-    #     inds_itt = torch.argsort(dist_matrix_itt, dim=1, descending=True)
-
-    #     # 计算当前排序的 Recall@10
-    #     current_topk = inds_itt.to(device)[:, :1]
-    #     current_correct = torch.zeros((num_image,), dtype=torch.bool).cuda()
-    #     # 假设 image_to_text_map 为每个图像的正确文本索引，扩展后逐行比较
-    #     for i in range(captions_per_image):
-    #         contains_index = torch.eq(
-    #             current_topk, image_to_text_map[:, i].unsqueeze(-1)
-    #         ).any(dim=1)
-    #         current_correct = torch.logical_or(current_correct, contains_index)
-    #     current_correct = current_correct.cpu()
-
-    #     # 如果还没有初始化最佳排序，则直接赋值
-    #     if best_inds_itt is None:
-    #         best_inds_itt = inds_itt.clone()
-    #         best_correct_itt = current_correct.clone()
-    #     else:
-    #         # 对于每个 query，如果当前排序能召回正确图像而之前未召回，则更新
-    #         update_mask = current_correct & (~best_correct_itt)
-    #         if update_mask.any():
-    #             best_inds_itt[update_mask] = inds_itt[update_mask]
-    #             best_correct_itt[update_mask] = current_correct[update_mask]
-
-    #     # Move all tensors to CPU to free up GPU memory
-    #     tmp_comb_emb = tmp_comb_emb.cpu()
-    #     label_emb = label_emb.cpu()
-
-    #     del tmp_comb_emb, label_emb, dist_matrix_tti, dist_matrix_itt
-
-    #     torch.cuda.empty_cache()

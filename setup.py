@@ -24,8 +24,10 @@ setup(
     author_email="A",
     url="A",  # REPLACE WITH YOUR OWN GITHUB PROJECT LINK
     install_requires=fetch_requirements("requirements.txt"),
-    # packages=find_packages(where="src"), # After publishing to PyPI, this should be added
-    # package_dir={"src": "src"}, # After publishing to PyPI, this should be added
+    # packages=find_packages(
+    # where="src"
+    # ),  # After publishing to PyPI, this should be added
+    package_dir={"src": "src"},  # After publishing to PyPI, this should be added
     python_requires=">=3.7.0",
     include_package_data=True,
     dependency_links=DEPENDENCY_LINKS,

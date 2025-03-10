@@ -18,6 +18,46 @@ from tqdm import tqdm
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+class UMAP_vis:
+    def __init__(self, device="cuda"):
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+        self.cluster = None
+        self.client = None
+        self.local_model = None  # Save the model
+
+    def initialize_cluster(self):
+        # Initialize Dask CUDA cluster and client
+        self.cluster = LocalCUDACluster(threads_per_worker=1)
+        self.client = Client(self.cluster)
+
+    def close_cluster(self):
+        # Close Dask CUDA cluster and client
+        self.client.close()  # type: ignore
+        self.cluster.close()  # type: ignore
+
+    def learn_umap(self, embedding, n_components: int = 2):
+        # Perform UMAP dimensionality reduction on embeddings
+        self.initialize_cluster()
+
+        embedding = embedding.to(self.device)
+        label_embedding_np = embedding.cpu().numpy()
+
+        local_model = UMAP(random_state=42, n_components=n_components)
+        umap_features = local_model.fit_transform(label_embedding_np)
+
+        # Save the model
+        if self.local_model is None:
+            self.local_model = local_model
+
+        return umap_features
+
+    def predict_umap(self, new_embedding: np.ndarray):
+        if self.local_model is None:
+            raise ValueError("UMAP model has not been trained yet.")
+        umap_features_new = self.local_model.transform(new_embedding)
+        return umap_features_new
+
+
 class Clustering:
     def __init__(self, device="cuda"):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -94,8 +134,8 @@ class Clustering:
 
         umap_features_np = umap_features.cpu().numpy()
         hdbscan_model = HDBSCAN(
-            min_cluster_size=50,
-            min_samples=10,
+            min_cluster_size=100,
+            min_samples=50,
             cluster_selection_method="leaf",  # https://docs.rapids.ai/api/cuml/stable/api/#hdbscan
         )
         hdbscan_model.fit(umap_features_np)

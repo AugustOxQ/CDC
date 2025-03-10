@@ -29,7 +29,7 @@ def norm_features(image_features: Tensor, text_features: Tensor) -> Tuple[Tensor
     return image_features, text_features
 
 
-def compute_cosine_similarity(features1, features2):
+def compute_cosine_similarity(features1: Tensor, features2: Tensor) -> Tensor:
     """Compute the pairwise cosine similarity between two sets of feature vectors.
 
     Args:
@@ -84,6 +84,17 @@ class ContrastiveLoss(nn.Module):
         text_features: Tensor,
         device: torch.device = device,
     ) -> Tensor:
+        """
+        Compute the contrastive loss between the image and text features.
+
+        Args:
+            image_features: The image features. A tensor of shape (batch_size, feature_dim).
+            text_features: The text features. A tensor of shape (batch_size, feature_dim).
+            device: The device to use for computation. Defaults to the device set by geoopt.
+
+        Returns:
+            The computed contrastive loss. A scalar.
+        """
         labels_matrix = torch.eye(image_features.size(0)).to(device)
         label = 1 - labels_matrix
 
@@ -112,20 +123,33 @@ class CosineLoss(nn.Module):
         combined_features: Tensor,
         device: torch.device = device,
     ) -> Tensor:
+        """
+        Compute the cosine loss between image features and combined features.
+
+        Args:
+            image_features: The image features. A tensor of shape (batch_size, feature_dim).
+            combined_features: The combined features. A tensor of shape (batch_size, feature_dim).
+            device: The device to use for computation. Defaults to the device set by geoopt.
+
+        Returns:
+            The computed cosine loss. A scalar.
+        """
         target = torch.ones(image_features.size(0)).to(device)
         output = self.loss(image_features, combined_features, target)
 
         return output
 
 
-class LabelContrastiveLoss(nn.Module):
+class LabelContrastiveLoss(
+    nn.Module
+):  # BUG: This is not work as expected, label embeddings should work in a different way, see notes
     def __init__(
         self,
         margin: float = 0.1,
         margin_pos: float = 0.5,
         margin_neg: float = 0.1,
         label_weight: float = 1.0,
-        diff_weight: float = 1.0,
+        diff_weight: float = 0.0,  # TODO: This is not actually correct, currently just use 0 weight for diff loss
         return_dict: bool = False,
     ) -> None:
         """Initialize Combined Cosine and Contrastive Loss module. Cosine Loss will be used to
@@ -164,6 +188,7 @@ class LabelContrastiveLoss(nn.Module):
         batch_size = image_features.size(0)
 
         # 1. Cosine loss between image_features and combined_features (positive pair)
+
         target_positive = torch.ones(batch_size).to(device)
         comb_contrastive_loss = self.cosine_loss(
             image_features, combined_features, target_positive
@@ -171,7 +196,7 @@ class LabelContrastiveLoss(nn.Module):
 
         # 2. Contrastive loss with positive and negative contrast if combined_features_neg is provided
         label_contrastive_loss = 0
-        if combined_features_neg is not None:
+        if combined_features_neg is not None and self.label_weight > 0:
             # Positive contrast (diagonal should be similar)
             positive_similarity = self.cosine_similarity(image_features, combined_features)
             positive_loss = self.cosine_loss(image_features, combined_features, target_positive)
@@ -188,7 +213,7 @@ class LabelContrastiveLoss(nn.Module):
 
         # 3. Contrastive loss with the difference of combined_features and raw_features
         diff_contrastive_loss = 0
-        if text_features is not None:
+        if text_features is not None and self.diff_weight > 0:
             raw_sim = compute_cosine_similarity(image_features, text_features)
             comb_sim = compute_cosine_similarity(image_features, combined_features)
 
