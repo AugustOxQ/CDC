@@ -13,7 +13,7 @@ Pillow==11.1.0
 Requests==2.32.3
 scikit_learn==1.6.1
 scipy==1.15.1
-SQLAlchemy==2.0.37
+SQLAlchemy==2.0.40
 torch==2.6.0
 tqdm==4.67.1
 transformers==4.26.1
