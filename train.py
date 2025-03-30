@@ -9,13 +9,14 @@ import hydra
 import numpy as np
 import torch
 import transformers
-import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer
+
+import wandb
 
 # Import local packages
 from src.data.cdc_datamodule import CDC_test
@@ -56,7 +57,6 @@ def train(cfg: DictConfig, **kwargs):
     scheduler = kwargs["scheduler"]
     embedding_manager = kwargs["embedding_manager"]
     update_label_embedding = kwargs["update_label_embedding"]
-    high_lr = kwargs["high_lr"]
     log_interval = cfg.train.log_interval
     wandb_run = kwargs["wandb_run"]
 
@@ -141,9 +141,10 @@ def train(cfg: DictConfig, **kwargs):
             {
                 "train/epoch": epoch,
                 "train/total_loss": loss.item(),
-                "train/comb_contrastive_loss": loss_dict["comb_contrastive_loss"].item(),
-                "train/label_contrastive_loss": loss_dict["label_contrastive_loss"].item(),
-                "train/diff_contrastive_loss": loss_dict["diff_contrastive_loss"].item(),
+                "train/loss_improve": loss_dict["loss_improve"].item(),
+                "train/loss_neg": loss_dict["loss_neg"].item(),
+                "train/loss_reg": loss_dict["loss_reg"].item(),
+                "train/loss_kl": loss_dict["loss_kl"].item(),
                 "train/l2_loss": l2_loss.item(),
                 "train/boundary_loss": boundary_loss.item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
@@ -276,11 +277,7 @@ def run(cfg: DictConfig, **kwargs):
 
     # Setup criteria and optimizer and scheduler
     criteria = LabelContrastiveLoss(
-        margin=0.1,
-        margin_pos=0.5,
-        margin_neg=0.1,
-        label_weight=1,
-        diff_weight=0.1,
+        margin=0.2,
         return_dict=True,
     )
     optimizer = torch.optim.AdamW(
@@ -311,18 +308,19 @@ def run(cfg: DictConfig, **kwargs):
     first_stage_n = cfg.train_2.first_stage_n  # Number of clusters after first stage
     second_stage_n = cfg.train_2.second_stage_n  # Number of clusters after second stage
     k_means_start_epoch = cfg.train_2.k_means_start_epoch  # Start k-means clustering
-    k_means_middle_epoch = cfg.train_2.k_means_middle_epoch  # Start slow k-means clustering
-    alpha_upper = cfg.train_2.alpha_upper  # Upper bound for alpha
+    k_means_middle_epoch = (
+        cfg.train_2.k_means_middle_epoch
+    )  # Start slow k-means clustering (hard update)
     k_means_end_epoch = cfg.train_2.k_means_end_epoch  # End k-means clustering
+    alpha_upper = cfg.train_2.alpha_upper  # Upper bound for alpha
     update_label_embedding = True  # Update label embeddings during training
-    high_lr = True
 
     assert (
         k_means_start_epoch <= k_means_end_epoch <= max_epoch
     ), f"Invalid epoch values for k-means clustering, {k_means_start_epoch}, {k_means_end_epoch}, {max_epoch}"
-    assert (
-        initial_n_clusters >= first_stage_n >= second_stage_n
-    ), f"Invalid number of clusters, {initial_n_clusters}, {first_stage_n}, {second_stage_n}"
+    # assert (
+    #     initial_n_clusters >= first_stage_n >= second_stage_n
+    # ), f"Invalid number of clusters, {initial_n_clusters}, {first_stage_n}, {second_stage_n}" #TODO: This is not necessary for HDBSCAN
 
     n_clusters_list = calculate_n_clusters_3(
         initial_n_clusters,
@@ -366,7 +364,6 @@ def run(cfg: DictConfig, **kwargs):
                 optimizer=optimizer,
                 embedding_manager=embedding_manager,
                 update_label_embedding=update_label_embedding,
-                high_lr=high_lr,
                 scheduler=scheduler,
                 wandb_run=wandb_run,
             )
@@ -461,7 +458,7 @@ def run(cfg: DictConfig, **kwargs):
                 print(f"Number of true cluster centers after update: {cluster_centers.size(0)}")
 
                 # update the embeddings
-                embedding_manager.update_all_chunks(sample_ids, updated_embeddings)
+                # embedding_manager.update_all_chunks(sample_ids, updated_embeddings) #TODO: Stop update embeddings in the phase two training
                 embedding_manager.load_embeddings()
 
                 # Check if the saved embeddings are the same as the updated embeddings
@@ -526,25 +523,32 @@ def run(cfg: DictConfig, **kwargs):
                 )
 
                 # Find unique labels and their counts
-                unique_labels_save, counts = torch.unique(updated_embeddings, return_counts=True)
+                unique_embeddings, counts = torch.unique(
+                    updated_embeddings, return_counts=True, dim=0
+                )
                 # Sort unique labels by descending count
                 sorted_indices = torch.argsort(counts, descending=True)
-                unique_labels_save = unique_labels_save[sorted_indices]
-                if unique_labels_save.size(0) > 1000:
-                    unique_labels_save = cluster_centers
+                unique_embeddings = unique_embeddings[sorted_indices][:1000]
+                print(f"Unique embeddings after sorting: {unique_embeddings.shape}")
+                # if unique_embeddings.size(0) > 1000:
+                #     unique_embeddings = cluster_centers
 
                 torch.save(
-                    unique_labels_save[:1000],  # Increase the number of embeddings to save to 300
+                    unique_embeddings,  # Increase the number of embeddings to save to 300
                     os.path.join(experiment_dir, "unique_embeddings.pt"),
                 )
 
             elif epoch >= k_means_middle_epoch:
-                print("##########No clustering##########")
-                # Load embeddings
-                embedding_manager.load_embeddings()
-                sample_ids, label_embedding = embedding_manager.get_all_embeddings()
-                unique_embeddings, _ = torch.unique(label_embedding, return_inverse=True, dim=0)
-                print(f"Unique embeddings: {unique_embeddings.size(0)}")
+                # print("##########No clustering##########")
+                # # Load embeddings
+                # embedding_manager.load_embeddings()
+                # sample_ids, label_embedding = embedding_manager.get_all_embeddings()
+                # unique_embeddings, _ = torch.unique(label_embedding, return_inverse=True, dim=0)
+                # print(f"Unique embeddings: {unique_embeddings.size(0)}")
+
+                unique_embeddings = torch.load(
+                    os.path.join(experiment_dir, "unique_embeddings.pt")
+                )
 
         # # Save model, epoch, optimizer, scheduler
         # if cfg.control.save:
@@ -587,7 +591,7 @@ def main(cfg):
     project = cfg.wandb.project
     entity = cfg.wandb.entity
     tags = cfg.wandb.tags
-    wandb.require("core")
+    wandb.require("core")  # type: ignore
     config_dict = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     wandb_run = wandb.init(project=project, entity=entity, tags=tags, config=config_dict)  # type: ignore
 

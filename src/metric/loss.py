@@ -145,34 +145,20 @@ class LabelContrastiveLoss(
 ):  # BUG: This is not work as expected, label embeddings should work in a different way, see notes
     def __init__(
         self,
-        margin: float = 0.1,
-        margin_pos: float = 0.5,
-        margin_neg: float = 0.1,
-        label_weight: float = 1.0,
-        diff_weight: float = 0.0,  # TODO: This is not actually correct, currently just use 0 weight for diff loss
+        margin: float = 0.2,
+        lambda_pos: float = 1.0,
+        lambda_neg: float = 1.0,
+        lambda_reg: float = 0.1,
+        lambda_kl: float = 0.1,
         return_dict: bool = False,
     ) -> None:
-        """Initialize Combined Cosine and Contrastive Loss module. Cosine Loss will be used to
-        contrast combined features and image features. Contrastive Loss will be used to contrast
-        positive label and negative label.
-
-        Args:
-            margin: Margin value for cosine embedding loss. Defaults to 0.1.
-            margin_pos: Margin value for positive contrastive loss. Defaults to 0.5.
-            margin_neg: Margin value for negative contrastive loss. Defaults to 0.1.
-            label_weight: Weight for regularizer loss. Defaults to 1.
-            diff_weight: Weight for difference loss. Defaults to 1.
-            return_dict: Return loss dictionary or not. Defaults to False.
-        """
         super().__init__()
         print("Using Combined Cosine and Contrastive Loss")
         self.margin = margin
-        self.margin_pos = margin_pos
-        self.margin_neg = margin_neg
-        self.cosine_similarity = nn.CosineSimilarity(dim=1)
-        self.cosine_loss = nn.CosineEmbeddingLoss(margin=margin)
-        self.label_weight = label_weight
-        self.diff_weight = diff_weight
+        self.lambda_pos = lambda_pos
+        self.lambda_neg = lambda_neg
+        self.lambda_reg = lambda_reg
+        self.lambda_kl = lambda_kl
         self.return_dict = return_dict
         # TODO Add diversity loss to encourage more diversity in the embeddings
 
@@ -187,63 +173,45 @@ class LabelContrastiveLoss(
         # Batch size
         batch_size = image_features.size(0)
 
-        # 1. Cosine loss between image_features and combined_features (positive pair)
+        # Compute cosine similarity
+        cos_pos = F.cosine_similarity(
+            combined_features, image_features, dim=-1
+        )  # Positive contrast
+        cos_orig = F.cosine_similarity(text_features, image_features, dim=-1)  # Original contrast
+        cos_neg = F.cosine_similarity(
+            combined_features_neg, image_features, dim=-1
+        )  # Negative contrast
 
-        target_positive = torch.ones(batch_size).to(device)
-        comb_contrastive_loss = self.cosine_loss(
-            image_features, combined_features, target_positive
-        )
+        loss_improve = torch.clamp(
+            cos_orig + self.margin - cos_pos, min=0
+        ).mean()  # Let combined features be closer to image features
+        loss_neg = torch.clamp(
+            cos_pos - cos_neg + self.margin, min=0
+        ).mean()  # Let combined features be further from neg
+        loss_reg = F.mse_loss(
+            combined_features, text_features
+        )  # Regularize combined features to be close to text features
 
-        # 2. Contrastive loss with positive and negative contrast if combined_features_neg is provided
-        label_contrastive_loss = 0
-        if combined_features_neg is not None and self.label_weight > 0:
-            # Positive contrast (diagonal should be similar)
-            positive_similarity = self.cosine_similarity(image_features, combined_features)
-            positive_loss = self.cosine_loss(image_features, combined_features, target_positive)
-
-            # Negative contrast (diagonal should be dissimilar)
-            target_negative = -torch.ones(batch_size).to(device)
-            negative_similarity = self.cosine_similarity(image_features, combined_features_neg)
-            negative_loss = self.cosine_loss(
-                image_features, combined_features_neg, target_negative
-            )
-
-            # Combine both positive and negative loss for contrastive learning
-            label_contrastive_loss = positive_loss + negative_loss
-
-        # 3. Contrastive loss with the difference of combined_features and raw_features
-        diff_contrastive_loss = 0
-        if text_features is not None and self.diff_weight > 0:
-            raw_sim = compute_cosine_similarity(image_features, text_features)
-            comb_sim = compute_cosine_similarity(image_features, combined_features)
-
-            diff_sim = comb_sim - raw_sim
-
-            if diff_sim.dim() != 2:
-                raise ValueError(
-                    "sim_diff should be a 2D matrix, but got a tensor with shape {}".format(
-                        diff_sim.shape
-                    )
-                )
-            # Positive loss: diagonal elements (positive pairs), we want sim_diff to be greater than margin_pos
-            pos_loss = torch.relu(self.margin_pos - diff_sim.diag()).mean()
-
-            # Negative loss: off-diagonal elements (negative pairs), we want sim_diff to be less than margin_neg
-            # We mask out the diagonal elements using torch.eye(batch_size)
-            mask = torch.eye(batch_size, dtype=torch.bool)
-            neg_loss = torch.relu(diff_sim[~mask] - self.margin_neg).mean()
-            diff_contrastive_loss = pos_loss + neg_loss
+        # loss_kl = F.mse_loss(combined_features, text_features) # Use L2 to approximate KL divergence
+        loss_kl = F.kl_div(
+            F.log_softmax(combined_features, dim=-1),
+            F.softmax(text_features, dim=-1),
+            reduction="batchmean",
+        )  # KL divergence between combined and text features
 
         # Total loss = cosine loss + contrastive loss (if applicable)
         total_loss = (
-            comb_contrastive_loss
-            + self.label_weight * label_contrastive_loss
-            + self.diff_weight * diff_contrastive_loss
+            self.lambda_pos * loss_improve
+            + self.lambda_neg * loss_neg
+            + self.lambda_reg * loss_reg
+            + self.lambda_kl * loss_kl
         )
+
         loss_dict = {
-            "comb_contrastive_loss": comb_contrastive_loss,
-            "label_contrastive_loss": label_contrastive_loss,
-            "diff_contrastive_loss": diff_contrastive_loss,
+            "loss_improve": loss_improve,
+            "loss_neg": loss_neg,
+            "loss_reg": loss_reg,
+            "loss_kl": loss_kl,
             "total_loss": total_loss,
         }
 
@@ -261,3 +229,61 @@ def main(): ...
 
 if __name__ == "__main__":
     main()
+
+
+# # Positive contrast (diagonal should be similar)
+# positive_similarity = self.cosine_similarity(image_features, combined_features)
+# positive_loss = self.cosine_loss(image_features, combined_features, target_positive)
+
+# # Negative contrast (diagonal should be dissimilar)
+# target_negative = -torch.ones(batch_size).to(device)
+# negative_similarity = self.cosine_similarity(image_features, combined_features_neg)
+# negative_loss = self.cosine_loss(image_features, combined_features_neg, target_negative)
+
+# # Combine both positive and negative loss for contrastive learning
+# label_contrastive_loss = positive_loss + negative_loss
+
+
+# 2. Contrastive loss with positive and negative contrast if combined_features_neg is provided
+# label_contrastive_loss = 0
+# if combined_features_neg is not None and self.label_weight > 0:
+#     # Part 1: let (txt1 - txt2) = D1, (Comb1-Comb2) = D2, then (D1 - D2) / 2 = D3.
+#     # Assume txt1 and txt2 is combined with lab1 and lab2 respectively.
+#     # Then, if D3 is higher, it means that lab1 and lab2 are dissimilar.
+#     # If D3 is lower, it means that lab1 and lab2 are similar.
+#     # We define the metric to measure the difference to be cosine similarity between txt1 and txt2.
+
+#     D1 = compute_cosine_similarity(text_features, text_features)
+#     D2 = compute_cosine_similarity(combined_features, combined_features)
+
+#     D3 = (D1 - D2) / 2
+
+#     D3_loss = self.cosine_loss(
+#         text_features, combined_features, D3
+#     )  # TODO: Check if this is correct
+
+#     # Part 2: let (Comb1 - txt1) = D3, (Comb2 - txt2) = D4, then (D3 + D4) / 2 = D5.
+#     # D5 works as a regularizer, such that the combined features should not be too far from the text features.
+
+# # 3. Contrastive loss with the difference of combined_features and raw_features
+# diff_contrastive_loss = 0
+# if text_features is not None and self.diff_weight > 0:
+#     raw_sim = compute_cosine_similarity(image_features, text_features)
+#     comb_sim = compute_cosine_similarity(image_features, combined_features)
+
+#     diff_sim = comb_sim - raw_sim
+
+#     if diff_sim.dim() != 2:
+#         raise ValueError(
+#             "s loss: diagonal elements (positive pairs), we want sim_diff to be greater than margin_pos
+#     pos_loss = torch.relu(self.margin_pos - diff_sim.diag()).mean()
+
+#     # Negative loss: off-diagonal elements (negative pairs), we want sim_diff to be less than margin_neg
+#     # We mask out the diagonal elements using torch.eye(batch_size)
+#     mask = torch.eye(batch_size, dtype=torch.bool)
+#     neg_loss = torch.relu(diff_sim[~mask] - self.margin_neg).mean()
+#     diff_contrastive_loss = pos_loss + neg_lossim_diff should be a 2D matrix, but got a tensor with shape {}".format(
+#                 diff_sim.shape
+#             )
+#         )
+#     # Positive

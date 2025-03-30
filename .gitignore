@@ -160,3 +160,4 @@ configs/*.yaml
 
 wandb/
 plot/
+.qodo

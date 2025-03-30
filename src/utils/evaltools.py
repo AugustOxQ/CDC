@@ -555,14 +555,23 @@ def eval_rank_oracle(
     best_inds_tti = None  # (n_text, n_image)
     best_rank_tti = torch.full((num_text,), math.inf)
 
+    worst_inds_tti = None  # (n_text, n_image)
+    worst_rank_tti = torch.full((num_text,), -1)
+
     best_inds_itt = None
     best_rank_itt = torch.full(
         (num_image,), math.inf
     )  # TODO: Mind this to be num_text and compute the actual abs rank instead abs mean rank
 
+    worst_inds_itt = None
+    worst_rank_itt = torch.full((num_image,), -1)
+
     # Add a record of which label is finally used for each text
     best_label_tti = -1 * torch.ones((num_text,))
     best_label_itt = -1 * torch.ones((num_image,))
+
+    worst_label_tti = -1 * torch.ones((num_text,))
+    worst_label_itt = -1 * torch.ones((num_image,))
 
     # First RANKING
     first_inds_tti = None  # (n_text, n_image)
@@ -611,7 +620,10 @@ def eval_rank_oracle(
                 best_rank_tti = abs_rank_tti.clone()
                 first_inds_tti = inds_tti.clone()
                 first_rank_tti = abs_rank_tti.clone()
+                worst_inds_tti = inds_tti.clone()
+                worst_rank_tti = abs_rank_tti.clone()
                 update_mask = torch.ones((num_text,), dtype=torch.bool)
+                update_mask_2 = torch.ones((num_text,), dtype=torch.bool)
             else:
                 # For each query, if the current ranking can recall the correct image and the previous one cannot, update
                 update_mask = abs_rank_tti < best_rank_tti
@@ -619,6 +631,12 @@ def eval_rank_oracle(
                     best_inds_tti[update_mask] = inds_tti[update_mask]
                     best_rank_tti[update_mask] = abs_rank_tti[update_mask]
                     best_label_tti[update_mask] = label_id
+
+                update_mask_2 = abs_rank_tti > worst_rank_tti
+                if update_mask_2.any():
+                    worst_inds_tti[update_mask_2] = inds_tti[update_mask_2]  # type: ignore
+                    worst_rank_tti[update_mask_2] = abs_rank_tti[update_mask_2]
+                    worst_label_tti[update_mask_2] = label_id
 
                 update_mask_first = first_label_tti == -1
                 hybrid_mask = update_mask & update_mask_first
@@ -647,7 +665,10 @@ def eval_rank_oracle(
                 best_rank_itt = abs_rank_itt.clone()
                 first_inds_itt = inds_itt.clone()
                 first_rank_itt = abs_rank_itt.clone()
+                worst_inds_itt = inds_itt.clone()
+                worst_rank_itt = abs_rank_itt.clone()
                 update_mask = torch.ones((num_image,), dtype=torch.bool)
+                update_mask_2 = torch.ones((num_image,), dtype=torch.bool)
             else:
                 # For each query, if the current ranking can recall the correct image and the previous one cannot, update
                 update_mask = abs_rank_itt < best_rank_itt
@@ -655,6 +676,12 @@ def eval_rank_oracle(
                     best_inds_itt[update_mask] = inds_itt[update_mask]
                     best_rank_itt[update_mask] = abs_rank_itt[update_mask]
                     best_label_itt[update_mask] = label_id
+
+                update_mask_2 = abs_rank_itt > worst_rank_itt
+                if update_mask_2.any():
+                    worst_inds_itt[update_mask_2] = inds_itt[update_mask_2]  # type: ignore
+                    worst_rank_itt[update_mask_2] = abs_rank_itt[update_mask_2]
+                    worst_label_itt[update_mask_2] = label_id
 
                 update_mask_first = first_label_itt == -1
                 hybrid_mask = update_mask & update_mask_first
@@ -718,7 +745,27 @@ def eval_rank_oracle(
             captions_per_image,
         )
 
-    # print("Done.")
+    # Worst label performance
+    (
+        text_to_image_recall_worst,
+        meanR_t2i_worst,
+        medR_t2i_worst,
+        mAP_t2i_worst,
+        image_to_text_recall_worst,
+        meanR_i2t_worst,
+        medR_i2t_worst,
+        mAP_i2t_worst,
+    ) = compute_recall_metrics(
+        worst_inds_tti,
+        worst_inds_itt,
+        text_to_image_map,
+        image_to_text_map,
+        k_vals,
+        num_text,
+        num_image,
+        captions_per_image,
+    )
+
     metrics = {
         f"{kwd}/i2t_R1": image_to_text_recall[0],
         f"{kwd}/i2t_R5": image_to_text_recall[1],
@@ -736,13 +783,40 @@ def eval_rank_oracle(
         f"{kwd}/t2i_mAP": mAP_t2i,
     }
 
+    metrics_2 = {
+        f"{kwd}/i2t_R1_worst": image_to_text_recall_worst[0],
+        f"{kwd}/i2t_R5_worst": image_to_text_recall_worst[1],
+        f"{kwd}/i2t_R10_worst": image_to_text_recall_worst[2],
+        f"{kwd}/i2t_rsum_worst": sum(image_to_text_recall_worst),
+        f"{kwd}/i2t_meanR_worst": meanR_i2t_worst,
+        f"{kwd}/i2t_medR_worst": medR_i2t_worst,
+        f"{kwd}/i2t_mAP_worst": mAP_i2t_worst,
+        f"{kwd}/t2i_R1_worst": text_to_image_recall_worst[0],
+        f"{kwd}/t2i_R5_worst": text_to_image_recall_worst[1],
+        f"{kwd}/t2i_R10_worst": text_to_image_recall_worst[2],
+        f"{kwd}/t2i_rsum_worst": sum(text_to_image_recall_worst),
+        f"{kwd}/t2i_meanR_worst": meanR_t2i_worst,
+        f"{kwd}/t2i_medR_worst": medR_t2i_worst,
+    }
+
     print(f"############start-{kwd}#########################")
     for key, value in metrics.items():
         print(f"{key}: {value}")
     print(f"############end-{kwd}#########################\n")
 
+    print("############start-worst#########################")
+    for key, value in metrics_2.items():
+        print(f"{key}: {value}")
+    print("############end-worst#########################\n")
+
     if use_best_label:
-        return metrics, best_label_tti, best_label_itt, inds_raw_tti, inds_raw_itt
+        return (
+            metrics,
+            best_label_tti,
+            best_label_itt,
+            inds_raw_tti,
+            inds_raw_itt,
+        )  # TODO: add metrics two return
     else:
         return metrics, first_label_tti, first_label_itt, inds_raw_tti, inds_raw_itt
 
