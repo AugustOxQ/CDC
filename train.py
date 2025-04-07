@@ -3,6 +3,7 @@ import os
 import random
 import warnings
 from datetime import datetime
+from enum import unique
 from turtle import update
 
 import hydra
@@ -10,6 +11,8 @@ import numpy as np
 import torch
 import transformers
 from omegaconf import DictConfig, OmegaConf
+from scipy.spatial.distance import cdist
+from sklearn.cluster import KMeans
 from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
@@ -73,6 +76,7 @@ def train(cfg: DictConfig, **kwargs):
     epoch_metrics = {"loss": 0.0, "other_metrics": {}}
 
     embedding_buffer = []
+    update_frequency = 50
 
     for batch_id, batch in enumerate(tqdm(train_dataloader)):
         img_emb, txt_emb, txt_full, label_embedding, sample_id = batch
@@ -131,12 +135,12 @@ def train(cfg: DictConfig, **kwargs):
             #         diff == 0
             #     ), "Label embedding should not be updated after backward pass"
 
-            # if update_label_embedding:
-            # embedding_manager.update_chunk_embeddings(
-            #     batch_id, sample_id, label_embedding
-            # )
+        # if update_label_embedding:
+        #     embedding_manager.update_chunk_embeddings(
+        #         batch_id, sample_id, label_embedding
+        #     )
 
-        embedding_buffer.append((batch_id, sample_id, label_embedding))
+        embedding_buffer.append((batch_id, sample_id, label_embedding.clone().detach()))
 
         # Log
         if scheduler is not None:
@@ -147,11 +151,13 @@ def train(cfg: DictConfig, **kwargs):
             )
 
         # After training loop, update embeddings if required
-        if (epoch + 1) % 100 == 0 or epoch == len(train_dataloader) - 1:
+        if (batch_id + 1) % update_frequency == 0 or batch_id == len(train_dataloader) - 1:
             for b_id, s_id, emb in embedding_buffer:
                 embedding_manager.update_chunk_embeddings(b_id, s_id, emb)
             embedding_buffer.clear()
-
+            print(
+                f"Updated {len(embedding_buffer)} embeddings in the buffer to the embedding manager"
+            )
         # Wandb logger
         wandb_run.log(
             {
@@ -333,7 +339,7 @@ def run(cfg: DictConfig, **kwargs):
     update_label_embedding = True  # Update label embeddings during training
 
     assert (
-        k_means_start_epoch <= k_means_end_epoch <= max_epoch
+        k_means_start_epoch <= k_means_end_epoch  # <= max_epoch
     ), f"Invalid epoch values for k-means clustering, {k_means_start_epoch}, {k_means_end_epoch}, {max_epoch}"
     # assert (
     #     initial_n_clusters >= first_stage_n >= second_stage_n
@@ -361,16 +367,16 @@ def run(cfg: DictConfig, **kwargs):
         if cfg.control.train:  # Network training
             print(f"##########Epoch {epoch}: Training##########")
 
-            # # Create new directory for the current epoch
-            if cfg.control.save_per_epoch is True:
-                new_embeddings_dir = folder_manager.create_epoch_folder(epoch)
-                embedding_manager.embeddings_dir = new_embeddings_dir
-                embedding_manager.save_embeddings_to_new_folder(new_embeddings_dir)
-            embedding_manager.load_embeddings()
+            # # # Create new directory for the current epoch
+            # if cfg.control.save_per_epoch is True:
+            #     new_embeddings_dir = folder_manager.create_epoch_folder(epoch)
+            #     embedding_manager.embeddings_dir = new_embeddings_dir
+            #     embedding_manager.save_embeddings_to_new_folder(new_embeddings_dir)
+            # embedding_manager.load_embeddings()
 
-            if epoch == k_means_end_epoch:
-                update_label_embedding = False
-                print("##########Cease label embedding updates##########")
+            # if epoch == k_means_end_epoch:
+            # update_label_embedding = False
+            # print("##########Cease label embedding updates##########")
 
             train_epoch_log = train(
                 cfg,
@@ -399,9 +405,17 @@ def run(cfg: DictConfig, **kwargs):
         if cfg.control.test:
             if unique_embeddings is not None:
 
+                kmeans = KMeans(n_clusters=min(50, unique_embeddings.shape[0])).fit(
+                    unique_embeddings.cpu().numpy()
+                )
+                centroids = kmeans.cluster_centers_
+                # Find closest real embedding to each centroid
+
+                indices = np.argmin(cdist(centroids, unique_embeddings), axis=1)
+                representatives = unique_embeddings[indices]
                 print("##########Testing test dataset##########")
                 inf_test_log = inference_test(
-                    model, processor, test_dataloader, unique_embeddings, epoch, device
+                    model, processor, test_dataloader, representatives, epoch, device
                 )
                 logger_epoch["inference_test"] = inf_test_log
                 wandb_run.log(inf_test_log)
