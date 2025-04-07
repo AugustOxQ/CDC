@@ -72,8 +72,6 @@ def train(cfg: DictConfig, **kwargs):
     model.train()
     epoch_metrics = {"loss": 0.0, "other_metrics": {}}
 
-    embedding_buffer = []
-
     for batch_id, batch in enumerate(tqdm(train_dataloader)):
         img_emb, txt_emb, txt_full, label_embedding, sample_id = batch
         img_emb, txt_emb, txt_full, label_embedding = (
@@ -84,14 +82,12 @@ def train(cfg: DictConfig, **kwargs):
         )
 
         img_emb, txt_emb, txt_full = (
-            img_emb.to(device, non_blocking=True),
-            txt_emb.to(device, non_blocking=True),
-            txt_full.to(device, non_blocking=True),
+            img_emb.to(device),
+            txt_emb.to(device),
+            txt_full.to(device),
         )
 
-        label_embedding = (
-            label_embedding.to(device, non_blocking=True).clone().detach().requires_grad_(True)
-        )
+        label_embedding = label_embedding.to(device).clone().detach().requires_grad_(True)
         label_embedding_cp = label_embedding.clone().detach()
 
         optimizer_label = torch.optim.AdamW(
@@ -122,21 +118,15 @@ def train(cfg: DictConfig, **kwargs):
         if update_label_embedding:
             optimizer_label.step()
 
-            # # Check if label_embedding is updated
-            # diff = torch.sum(label_embedding - label_embedding_cp)
-            # if update_label_embedding:
-            #     assert diff != 0, "Label embedding should be updated after backward pass"
-            # else:
-            #     assert (
-            #         diff == 0
-            #     ), "Label embedding should not be updated after backward pass"
+        # Check if label_embedding is updated
+        diff = torch.sum(label_embedding - label_embedding_cp)
+        if update_label_embedding:
+            assert diff != 0, "Label embedding should be updated after backward pass"
+        else:
+            assert diff == 0, "Label embedding should not be updated after backward pass"
 
-            # if update_label_embedding:
-            # embedding_manager.update_chunk_embeddings(
-            #     batch_id, sample_id, label_embedding
-            # )
-
-        embedding_buffer.append((batch_id, sample_id, label_embedding))
+        if update_label_embedding:
+            embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding)
 
         # Log
         if scheduler is not None:
@@ -145,12 +135,6 @@ def train(cfg: DictConfig, **kwargs):
             print(
                 f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}, Dynamic Scalar: {model.module.combiner.print_scalar()}"
             )
-
-        # After training loop, update embeddings if required
-        if (epoch + 1) % 100 == 0 or epoch == len(train_dataloader) - 1:
-            for b_id, s_id, emb in embedding_buffer:
-                embedding_manager.update_chunk_embeddings(b_id, s_id, emb)
-            embedding_buffer.clear()
 
         # Wandb logger
         wandb_run.log(
@@ -275,7 +259,6 @@ def run(cfg: DictConfig, **kwargs):
         batch_size=1,
         shuffle=False,
         num_workers=cfg.train.num_workers,
-        pin_memory=True,
     )
 
     test_dataset = CDC_test(
@@ -439,9 +422,7 @@ def run(cfg: DictConfig, **kwargs):
                 )
 
                 print("##########Performing Clustering##########")
-                umap_labels, _ = clustering.get_hdbscan(
-                    umap_features_high, n_clusters=n_clusters, method="leaf"
-                )
+                umap_labels, _ = clustering.get_hdbscan(umap_features_high, n_clusters=n_clusters)
                 unique_umap_labels = torch.unique(umap_labels)
                 print(f"Unique UMAP labels: {unique_umap_labels.size(0)}")
 
@@ -456,13 +437,12 @@ def run(cfg: DictConfig, **kwargs):
                     high_lr = False
                     print("##########Performing hard clustering update##########")
 
-                updated_embeddings, cluster_centers, cluster_counts = clustering.hdbscan_update(
+                updated_embeddings, cluster_centers = clustering.hdbscan_update(
                     umap_labels=umap_labels,
                     original_embeddings=label_embedding,
                     update_type=update_type,
                     alpha=alpha,
                     update_noise=update_noise,
-                    center_only=False,
                 )
 
                 # Find unique embeddings, and return the indices of the unique embeddings according to the descending order of the size of the cluster
@@ -491,9 +471,6 @@ def run(cfg: DictConfig, **kwargs):
                 # differences = torch.any(updated_embeddings != updated_embeddings_2, dim=1)
                 # num_different_rows = torch.sum(differences).item()
                 # assert num_different_rows == 0, f"Embeddings have not been updated after clustering, {num_different_rows} rows are different"
-
-                # Find unique labels and their counts
-                # Sort unique labels by descending count
 
                 if cfg.control.save:
                     # Plot UMAP before clustering update
@@ -545,41 +522,46 @@ def run(cfg: DictConfig, **kwargs):
                     }
                 )
 
-                center_sorted_indices = torch.argsort(cluster_counts, descending=True)
-                unique_embeddings = cluster_centers[center_sorted_indices]
-                print(f"Cluster Centers after sorting: {unique_embeddings.shape}")
+                # Find unique labels and their counts
+                unique_embeddings, counts = torch.unique(
+                    updated_embeddings, return_counts=True, dim=0
+                )
+                # Sort unique labels by descending count
+                sorted_indices = torch.argsort(counts, descending=True)
+                unique_embeddings = unique_embeddings[sorted_indices][:1000]
+                print(f"Unique embeddings after sorting: {unique_embeddings.shape}")
+                # if unique_embeddings.size(0) > 1000:
+                #     unique_embeddings = cluster_centers
 
                 torch.save(
                     unique_embeddings,  # Increase the number of embeddings to save to 300
                     os.path.join(experiment_dir, "unique_embeddings.pt"),
                 )
 
-            # elif epoch >= k_means_middle_epoch:
-            #     # print("##########No clustering##########")
-            #     # # Load embeddings
-            #     # embedding_manager.load_embeddings()
-            #     # sample_ids, label_embedding = embedding_manager.get_all_embeddings()
-            #     # unique_embeddings, _ = torch.unique(label_embedding, return_inverse=True, dim=0)
-            #     # print(f"Unique embeddings: {unique_embeddings.size(0)}")
+            elif epoch >= k_means_middle_epoch:
+                # print("##########No clustering##########")
+                # # Load embeddings
+                # embedding_manager.load_embeddings()
+                # sample_ids, label_embedding = embedding_manager.get_all_embeddings()
+                # unique_embeddings, _ = torch.unique(label_embedding, return_inverse=True, dim=0)
+                # print(f"Unique embeddings: {unique_embeddings.size(0)}")
 
-            #     unique_embeddings = torch.load(
-            #         os.path.join(experiment_dir, "unique_embeddings.pt")
-            #     )
+                unique_embeddings = torch.load(
+                    os.path.join(experiment_dir, "unique_embeddings.pt")
+                )
 
-        if cfg.control.save_per_epoch is True and unique_embeddings is not None:
-            # Save model, epoch, optimizer, scheduler
-            folder_manager.save_model(model, checkpoint_dir, epoch)
-
-            torch.save(
-                unique_embeddings,
-                os.path.join(experiment_dir, f"unique_embeddings_{epoch}.pt"),
-            )
+        # # Save model, epoch, optimizer, scheduler
+        # if cfg.control.save:
+        #     # Save merge history
+        #     folder_manager.save_model(model, checkpoint_dir, epoch)
 
         # Save logger per epoch
         logger.append(logger_epoch)
 
     # Save final model and merge history
     folder_manager.save_final_model(model, experiment_dir)
+    # folder_manager.save_merge_history(embedding_manager.merge_history, experiment_dir)
+    # feature_manager.close()
 
     # Clean cuda cache
     del (

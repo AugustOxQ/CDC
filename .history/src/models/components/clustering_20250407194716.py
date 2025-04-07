@@ -129,14 +129,7 @@ class Clustering:
 
         return umap_labels, centers
 
-    def get_hdbscan(
-        self,
-        umap_features,
-        n_clusters,
-        min_cluster_size=100,
-        min_sample=50,
-        method="eom",
-    ):  # leaf or eom
+    def get_hdbscan(self, umap_features, n_clusters):
         self.initialize_cluster()
 
         umap_features_np = umap_features.cpu().numpy()
@@ -199,7 +192,6 @@ class Clustering:
         update_type="hard",
         alpha=0.5,
         update_noise="ignore",  # 'ignore' or 'assign'
-        center_only=False,
     ):
         device = original_embeddings.device
 
@@ -216,7 +208,6 @@ class Clustering:
             device=device,
         )
         updated_embeddings = original_embeddings.clone()
-        center_counts = []
 
         # Map labels to indices for cluster centers
         label_to_idx = {nn_label.item(): idx for idx, nn_label in enumerate(non_noise_labels)}
@@ -225,16 +216,9 @@ class Clustering:
         print("Calculating cluster centers")
         for non_noise_label in tqdm(non_noise_labels):
             cluster_indices = (umap_labels == non_noise_label).nonzero(as_tuple=True)[0].to(device)
-            center_counts.append(len(cluster_indices))
             cluster_embeddings = original_embeddings[cluster_indices]
             cluster_center = cluster_embeddings.mean(dim=0)
             cluster_centers[label_to_idx[non_noise_label.item()]] = cluster_center
-
-        cluster_counts = torch.tensor(center_counts).to(device)
-
-        if center_only:
-            # Only return the cluster centers
-            return None, cluster_centers, cluster_counts
 
         if update_noise == "assign":
             print("Assigning noise points to nearest clusters")
@@ -301,7 +285,7 @@ class Clustering:
 
         if len(cluster_centers) == 0:
             cluster_centers = torch.zeros((1, original_embeddings.shape[-1]), device=device)
-        return updated_embeddings, cluster_centers, cluster_counts
+        return updated_embeddings, cluster_centers
 
 
 def test_kmeans():
