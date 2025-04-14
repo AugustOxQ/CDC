@@ -163,74 +163,74 @@ def calculate_metrics(inds, mappings, captions_per_image):
     return (meanR, medR, mean_ap)
 
 
-def encode_data(model, data_loader, tokenizer, label_embeddings: Tensor, device=device):
-    """Encode all images and captions loadable by `data_loader`"""
-    # switch to evaluate mode
-    model.eval()
-    print("Evaluating...")
+# def encode_data(model, data_loader, tokenizer, label_embeddings: Tensor, device=device):
+#     """Encode all images and captions loadable by `data_loader`"""
+#     # switch to evaluate mode
+#     model.eval()
+#     print("Evaluating...")
 
-    # Lists to keep all the embeddings
-    img_embs = []
-    cap_embs = []
+#     # Lists to keep all the embeddings
+#     img_embs = []
+#     cap_embs = []
 
-    #  (as there are multiple pieces of text for each image)
-    image_to_text_map = []
+#     #  (as there are multiple pieces of text for each image)
+#     image_to_text_map = []
 
-    # text_to_image_map[i] gives the corresponding image index for the ith text
-    text_to_image_map = []
+#     # text_to_image_map[i] gives the corresponding image index for the ith text
+#     text_to_image_map = []
 
-    text_index = 0
-    image_index = 0
+#     text_index = 0
+#     image_index = 0
 
-    with torch.no_grad():
-        for batch_id, batch in enumerate(tqdm(data_loader)):
-            image, text = batch
-            image = image.to(device)
-            captions = tokenizer(
-                text,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=77,
-            ).to(device)
+#     with torch.no_grad():
+#         for batch_id, batch in enumerate(tqdm(data_loader)):
+#             image, text = batch
+#             image = image.to(device)
+#             captions = tokenizer(
+#                 text,
+#                 return_tensors="pt",
+#                 padding="max_length",
+#                 truncation=True,
+#                 max_length=77,
+#             ).to(device)
 
-            batch_size = image["pixel_values"].shape[0]
-            captions_per_image = data_loader.dataset.captions_per_image
+#             batch_size = image["pixel_values"].shape[0]
+#             captions_per_image = data_loader.dataset.captions_per_image
 
-            # Update text_to_image_map and image_to_text_map for this batch
-            for batch_id in range(batch_size):
-                # the next image corresponds to text captions [text_index ... text_index + captions_per_image - 1]
-                text_indices = list(range(text_index, text_index + captions_per_image))
-                image_to_text_map.append(text_indices)
-                text_index += captions_per_image
+#             # Update text_to_image_map and image_to_text_map for this batch
+#             for batch_id in range(batch_size):
+#                 # the next image corresponds to text captions [text_index ... text_index + captions_per_image - 1]
+#                 text_indices = list(range(text_index, text_index + captions_per_image))
+#                 image_to_text_map.append(text_indices)
+#                 text_index += captions_per_image
 
-                # Each of the next captions_per_image text captions correspond to the same image
-                text_to_image_map += [image_index] * captions_per_image
-                image_index += 1
+#                 # Each of the next captions_per_image text captions correspond to the same image
+#                 text_to_image_map += [image_index] * captions_per_image
+#                 image_index += 1
 
-            captions = torch.flatten(captions, start_dim=0, end_dim=1)
+#             captions = torch.flatten(captions, start_dim=0, end_dim=1)
 
-            img_emb, txt_emb = model.encode_img_txt(image, captions)
+#             img_emb, txt_emb = model.encode_img_txt(image, captions)
 
-            # Convert PyTorch tensors to NumPy arrays
-            img_emb_np = img_emb.cpu().numpy()
-            txt_emb_np = txt_emb.cpu().numpy()
+#             # Convert PyTorch tensors to NumPy arrays
+#             img_emb_np = img_emb.cpu().numpy()
+#             txt_emb_np = txt_emb.cpu().numpy()
 
-            best_cosine_sim = np.full(batch_size, -1.0)  # Initialize with -1
-            best_comb_emb = np.zeros((batch_size, label_embeddings.size(1)))
+#             best_cosine_sim = np.full(batch_size, -1.0)  # Initialize with -1
+#             best_comb_emb = np.zeros((batch_size, label_embeddings.size(1)))
 
-            img_embs.append(img_emb)
-            cap_embs.append(txt_emb)
+#             img_embs.append(img_emb)
+#             cap_embs.append(txt_emb)
 
-    image_embeddings = torch.cat(img_embs, axis=0)  # type: ignore
-    text_embeddings = torch.cat(cap_embs, axis=0)  # type: ignore
-    text_to_image_map = torch.LongTensor(text_to_image_map).to(device)
-    image_to_text_map = torch.LongTensor(image_to_text_map).to(device)
+#     image_embeddings = torch.cat(img_embs, axis=0)  # type: ignore
+#     text_embeddings = torch.cat(cap_embs, axis=0)  # type: ignore
+#     text_to_image_map = torch.LongTensor(text_to_image_map).to(device)
+#     image_to_text_map = torch.LongTensor(image_to_text_map).to(device)
 
-    image_embeddings /= image_embeddings.norm(dim=-1, keepdim=True)
-    text_embeddings /= text_embeddings.norm(dim=-1, keepdim=True)
+#     image_embeddings /= image_embeddings.norm(dim=-1, keepdim=True)
+#     text_embeddings /= text_embeddings.norm(dim=-1, keepdim=True)
 
-    return image_embeddings, text_embeddings, text_to_image_map, image_to_text_map
+#     return image_embeddings, text_embeddings, text_to_image_map, image_to_text_map
 
 
 def evalrank_i2t(

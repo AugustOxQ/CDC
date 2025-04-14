@@ -285,8 +285,10 @@ def run(cfg: DictConfig, **kwargs):
         annotation_path=cfg.dataset.test_path,
         image_path=cfg.dataset.img_path_test,
         processor=processor,
-        ratio=1,
+        ratio=0.2 if "redcaps" in cfg.dataset.test_path else 1,
     )
+
+    print(f"Test dataset size: {len(test_dataset)}")  # 0.2 for redcaps, 1 for flickr30k
 
     test_dataloader = DataLoader(
         test_dataset,
