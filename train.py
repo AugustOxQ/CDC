@@ -75,9 +75,6 @@ def train(cfg: DictConfig, **kwargs):
     model.train()
     epoch_metrics = {"loss": 0.0, "other_metrics": {}}
 
-    embedding_buffer = []
-    update_frequency = 50
-
     for batch_id, batch in enumerate(tqdm(train_dataloader)):
         img_emb, txt_emb, txt_full, label_embedding, sample_id = batch
         img_emb, txt_emb, txt_full, label_embedding = (
@@ -96,7 +93,7 @@ def train(cfg: DictConfig, **kwargs):
         label_embedding = (
             label_embedding.to(device, non_blocking=True).clone().detach().requires_grad_(True)
         )
-        label_embedding_cp = label_embedding.clone().detach()
+        # label_embedding_cp = label_embedding.clone().detach()
 
         optimizer_label = torch.optim.AdamW(
             [label_embedding],
@@ -136,11 +133,9 @@ def train(cfg: DictConfig, **kwargs):
             #     ), "Label embedding should not be updated after backward pass"
 
         # if update_label_embedding:
-        #     embedding_manager.update_chunk_embeddings(
-        #         batch_id, sample_id, label_embedding
-        #     )
+        embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding)
 
-        embedding_buffer.append((batch_id, sample_id, label_embedding.clone().detach()))
+        # embedding_buffer.append((batch_id, sample_id, label_embedding.clone().detach()))
 
         # Log
         if scheduler is not None:
@@ -150,15 +145,17 @@ def train(cfg: DictConfig, **kwargs):
                 f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}, Dynamic Scalar: {model.module.combiner.print_scalar()}"
             )
 
-        # After training loop, update embeddings if required
-        if (batch_id + 1) % update_frequency == 0 or batch_id == len(train_dataloader) - 1:
-            for b_id, s_id, emb in embedding_buffer:
-                embedding_manager.update_chunk_embeddings(b_id, s_id, emb)
-            embedding_buffer.clear()
-            print(
-                f"Updated {len(embedding_buffer)} embeddings in the buffer to the embedding manager"
-            )
-        # Wandb logger
+        # # After training loop, update embeddings if required
+        # if (batch_id + 1) % update_frequency == 0 or batch_id == len(
+        #     train_dataloader
+        # ) - 1:
+        #     for b_id, s_id, emb in embedding_buffer:
+        #         embedding_manager.update_chunk_embeddings(b_id, s_id, emb)
+        #     print(
+        #         f"Updated {len(embedding_buffer)} embeddings in the buffer to the embedding manager"
+        #     )
+        #     embedding_buffer.clear()
+        # # Wandb logger
         wandb_run.log(
             {
                 "train/epoch": epoch,
@@ -459,16 +456,16 @@ def run(cfg: DictConfig, **kwargs):
                 unique_umap_labels = torch.unique(umap_labels)
                 print(f"Unique UMAP labels: {unique_umap_labels.size(0)}")
 
-                # Map clustering results back to the original embeddings
-                if epoch < k_means_middle_epoch:
-                    update_noise = "ignore"
-                    update_type = "soft"
-                    print("##########Performing soft clustering update##########")
-                else:
-                    update_noise = "assign"
-                    update_type = "hard"
-                    high_lr = False
-                    print("##########Performing hard clustering update##########")
+                # Map clustering results back to the original embeddings #TODO: exclude hard update now
+                # if epoch < k_means_middle_epoch:
+                update_noise = "assign"  # TODO: We assign all noise points to the nearest cluster
+                update_type = "soft"
+                print("##########Performing soft clustering update##########")
+                # else: #
+                #     update_noise = "assign"
+                #     update_type = "hard"
+                #     high_lr = False
+                #     print("##########Performing hard clustering update##########")
 
                 updated_embeddings, cluster_centers, cluster_counts = clustering.hdbscan_update(
                     umap_labels=umap_labels,
@@ -492,7 +489,9 @@ def run(cfg: DictConfig, **kwargs):
                 print(f"Number of true cluster centers after update: {cluster_centers.size(0)}")
 
                 # update the embeddings
-                # embedding_manager.update_all_chunks(sample_ids, updated_embeddings) #TODO: Stop update embeddings in the phase two training
+                embedding_manager.update_all_chunks(
+                    sample_ids, updated_embeddings
+                )  # TODO: Stop update embeddings in the phase two training
                 embedding_manager.load_embeddings()
 
                 # Check if the saved embeddings are the same as the updated embeddings
@@ -583,10 +582,10 @@ def run(cfg: DictConfig, **kwargs):
         if cfg.control.save_per_epoch is True and unique_embeddings is not None:
             # Save model, epoch, optimizer, scheduler
             folder_manager.save_model(model, checkpoint_dir, epoch)
-
+            cluster_folder = folder_manager.get_cluster_folder(experiment_dir)
             torch.save(
                 unique_embeddings,
-                os.path.join(experiment_dir, f"unique_embeddings_{epoch}.pt"),
+                os.path.join(cluster_folder, f"unique_embeddings_{epoch}.pt"),
             )
 
         # Save logger per epoch

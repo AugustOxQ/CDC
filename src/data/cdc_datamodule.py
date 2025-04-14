@@ -206,11 +206,13 @@ class CDC_train_preextract(Dataset):
             self.chunk_data = self.feature_manager.get_chunk(chunk_id)
 
         img_emb = self.chunk_data["img_features"][:]
+        # img_full = self.chunk_data["img_full"][:]
         txt_emb = self.chunk_data["txt_features"][:]
         txt_full = self.chunk_data["txt_full"][:]
         sample_id = self.chunk_data["sample_ids"][:]
 
         img_emb = torch.tensor(img_emb, dtype=torch.float32)
+        # img_full = torch.tensor(img_full, dtype=torch.float32)
         txt_emb = torch.tensor(txt_emb, dtype=torch.float32)
         txt_full = torch.tensor(txt_full, dtype=torch.float32)
 
@@ -219,14 +221,14 @@ class CDC_train_preextract(Dataset):
         # Turn sample_id into a list of integers
         sample_id = [int(i) for i in sample_id]
         sample_id_2 = [int(i) for i in sample_id_2]
+        if idx % 100 == 0:
+            assert len(sample_id) == len(
+                sample_id_2
+            ), f"Sample ID length mismatch: expected {len(sample_id)}, got {len(sample_id_2)}"
 
-        assert len(sample_id) == len(
-            sample_id_2
-        ), f"Sample ID length mismatch: expected {len(sample_id)}, got {len(sample_id_2)}"
-
-        assert (
-            sample_id[:10] == sample_id_2[:10]
-        ), f"Sample ID mismatch: expected {sample_id[:10]}, got {sample_id_2[:10]}"
+            assert (
+                sample_id[:10] == sample_id_2[:10]
+            ), f"Sample ID mismatch: expected {sample_id[:10]}, got {sample_id_2[:10]}"
 
         label_embedding = torch.tensor(embedding, dtype=torch.float32)
 
@@ -234,7 +236,14 @@ class CDC_train_preextract(Dataset):
 
 
 class CDC_test(Dataset):
-    def __init__(self, annotation_path: str, image_path: str, processor, ratio: float = 0.1):
+    def __init__(
+        self,
+        annotation_path: str,
+        image_path: str,
+        processor,
+        ratio: float = 0.1,
+        crop_num: int = 5,
+    ):
         """Initialize the CDC_test class.
 
         Parameters
@@ -263,7 +272,18 @@ class CDC_test(Dataset):
         self.annotations = self.annotations[: int(len(self.annotations) * ratio)]
         self.image_path = image_path
         self.processor = processor
-        self.captions_per_image = 1 if type(self.annotations[0]["caption"]) is str else 5
+        self.crop_num = crop_num
+        self.caption_length_list = []
+        for i in range(len(self.annotations)):
+            if type(self.annotations[i]["caption"]) is str:
+                self.caption_length_list.append(1)
+            else:
+                self.caption_length_list.append(len(self.annotations[i]["caption"]))
+        self.captions_per_image = (
+            1
+            if type(self.annotations[0]["caption"]) is str
+            else len(self.annotations[0]["caption"])
+        )
         print(f"Captions per image: {self.captions_per_image}")
 
     def __len__(self):
@@ -304,7 +324,7 @@ class CDC_test(Dataset):
         raw_text = (
             self.annotations[idx]["caption"]
             if type(self.annotations[idx]["caption"]) is str
-            else self.annotations[idx]["caption"][:5]
+            else self.annotations[idx]["caption"][: self.crop_num]
         )
 
         return image_input, raw_text

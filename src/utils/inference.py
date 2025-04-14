@@ -172,9 +172,7 @@ def extract_and_store_features(
             ).to(device)
 
             with torch.no_grad():
-                img_emb, txt_emb, _, txt_full = model.module.encode_img_txt(
-                    image_input, text_input
-                )
+                img_emb, txt_emb, txt_full = model.module.encode_img_txt(image_input, text_input)
                 img_emb, txt_emb, txt_full = (
                     img_emb.cpu().numpy(),
                     txt_emb.cpu().numpy(),

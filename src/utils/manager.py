@@ -96,14 +96,27 @@ class EmbeddingManager:
             )
             self.chunk_files.append(chunk_file)
             embeddings = {}
-            for _, sample_id in enumerate(
-                self.sample_ids_list[chunk_idx : chunk_idx + self.chunk_size]
-            ):
-                # embeddings[sample_id] = torch.randn(
-                #     self.embedding_dim
-                # )  # normally distributed random embeddings
-                # embeddings[sample_id] = torch.exp(torch.randn(self.embedding_dim) * std_dev + mean) # exponentially distributed random embeddings
-                embeddings[sample_id] = torch.zeros(self.embedding_dim)  # zero embeddings
+            # for _, sample_id in enumerate(
+            #     self.sample_ids_list[chunk_idx : chunk_idx + self.chunk_size]
+            # ):
+            #     # embeddings[sample_id] = torch.randn(
+            #     #     self.embedding_dim
+            #     # )  # normally distributed random embeddings
+            #     # embeddings[sample_id] = torch.exp(torch.randn(self.embedding_dim) * std_dev + mean) # exponentially distributed random embeddings
+            #     embeddings[sample_id] = torch.zeros(
+            #         self.embedding_dim
+            #     )  # zero embeddings
+            #     self.index_mapping[sample_id] = (chunk_file, sample_id)
+            #     self.embedding_references[sample_id] = sample_id
+
+            chunk_sample_ids = self.sample_ids_list[chunk_idx : chunk_idx + self.chunk_size]
+            n_samples = len(chunk_sample_ids)
+            embeddings_tensor = torch.zeros((n_samples, self.embedding_dim))
+            embeddings = {
+                sample_id: embeddings_tensor[i] for i, sample_id in enumerate(chunk_sample_ids)
+            }
+            # Update index mappings
+            for i, sample_id in enumerate(chunk_sample_ids):
                 self.index_mapping[sample_id] = (chunk_file, sample_id)
                 self.embedding_references[sample_id] = sample_id
 
@@ -208,6 +221,8 @@ class FolderManager:
         plot_dir = os.path.join(self.experiment_dir, "plots")
         os.makedirs(plot_dir, exist_ok=True)
 
+        self.create_cluster_folder(self.experiment_dir)
+
         return self.experiment_dir, init_dir, plot_dir
 
     def load_experiment(self, experiment_dir):
@@ -249,6 +264,14 @@ class FolderManager:
         logs_dir = os.path.join(experiment_dir, "logs")
         os.makedirs(logs_dir, exist_ok=True)
         return logs_dir
+
+    def create_cluster_folder(self, experiment_dir):
+        cluster_folder = os.path.join(experiment_dir, "clusters")
+        os.makedirs(cluster_folder, exist_ok=True)
+        return cluster_folder
+
+    def get_cluster_folder(self, experiment_dir):
+        return os.path.join(experiment_dir, "clusters")
 
     def create_directories(self, experiment_dir):
         # plot_dir = self.create_plot_folder(experiment_dir)

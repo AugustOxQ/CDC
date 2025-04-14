@@ -156,8 +156,10 @@ outputs/
 res/
 logs/
 data/
+ckpt2/
 configs/*.yaml
 
 wandb/
 plot/
 .qodo
+.history/

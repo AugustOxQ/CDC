@@ -49,12 +49,20 @@ class UMAP_vis:
         if self.local_model is None:
             self.local_model = local_model
 
+        umap_features = torch.tensor(umap_features, device=self.device)
+
+        self.close_cluster()
+
         return umap_features
 
     def predict_umap(self, new_embedding: np.ndarray):
+        self.initialize_cluster()
         if self.local_model is None:
             raise ValueError("UMAP model has not been trained yet.")
         umap_features_new = self.local_model.transform(new_embedding)
+
+        umap_features_new = torch.tensor(umap_features_new, device=self.device)
+        self.close_cluster()
         return umap_features_new
 
 
@@ -141,9 +149,9 @@ class Clustering:
 
         umap_features_np = umap_features.cpu().numpy()
         hdbscan_model = HDBSCAN(
-            min_cluster_size=100,
-            min_samples=50,
-            cluster_selection_method="leaf",  # https://docs.rapids.ai/api/cuml/stable/api/#hdbscan
+            min_cluster_size=min_cluster_size,
+            min_samples=min_sample,
+            cluster_selection_method=method,  # https://docs.rapids.ai/api/cuml/stable/api/#hdbscan
         )
         hdbscan_model.fit(umap_features_np)
         umap_labels = hdbscan_model.labels_

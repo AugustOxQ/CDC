@@ -195,7 +195,7 @@ def encode_data(model, data_loader, tokenizer, label_embeddings: Tensor, device=
             ).to(device)
 
             batch_size = image["pixel_values"].shape[0]
-            captions_per_image = 5
+            captions_per_image = data_loader.dataset.captions_per_image
 
             # Update text_to_image_map and image_to_text_map for this batch
             for batch_id in range(batch_size):
@@ -952,7 +952,7 @@ def eval_rank_oracle_check_per_label(
     # tti part
 
     # Get tti similarity matrix
-    dist_matrix_tti = comb_emb @ all_img_emb.T
+    dist_matrix_tti = comb_emb_normed @ all_img_emb.T
     dist_matrix_tti = dist_matrix_tti.cpu()
 
     # Sort in descending order; first is the biggest logit
