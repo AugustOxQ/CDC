@@ -7,6 +7,7 @@ import torch.nn.init
 from transformers import CLIPModel
 
 from src.models.components import (
+    Combiner_add,
     Combiner_basic,
     Combiner_basic_low,
     Combiner_cross_attention,
@@ -51,7 +52,7 @@ class CDC(nn.Module):
         self.label_encoder = nn.Identity()
 
         # Combiner network to combine text and label features
-        self.combiner = Combiner_basic_low(
+        self.combiner = Combiner_add(
             clip_feature_dim=512,
             projection_dim=512,
             hidden_dim=d_model,

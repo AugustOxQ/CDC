@@ -190,7 +190,7 @@ class LabelContrastiveLoss(
         ).mean()  # Let combined features be further from neg
         loss_reg = F.mse_loss(
             combined_features, text_features
-        )  # Regularize combined features to be close to text features
+        )  # Regularize combined features to be close to text features #TODO Check if this brings
 
         # loss_kl = F.mse_loss(combined_features, text_features) # Use L2 to approximate KL divergence
         loss_kl = F.kl_div(

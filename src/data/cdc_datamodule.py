@@ -284,6 +284,7 @@ class CDC_test(Dataset):
             if type(self.annotations[0]["caption"]) is str
             else len(self.annotations[0]["caption"])
         )
+        self.captions_per_image = min(self.captions_per_image, self.crop_num)
         print(f"Captions per image: {self.captions_per_image}")
 
     def __len__(self):
