@@ -159,6 +159,7 @@ class LabelContrastiveLoss(
         self.lambda_neg = lambda_neg
         self.lambda_reg = lambda_reg
         self.lambda_kl = lambda_kl
+        self.loss_lbl = nn.CosineEmbeddingLoss(margin=margin)
         self.return_dict = return_dict
         # TODO Add diversity loss to encourage more diversity in the embeddings
 

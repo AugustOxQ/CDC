@@ -8,10 +8,8 @@ from transformers import CLIPModel
 
 from src.models.components import (
     Combiner_add,
-    Combiner_basic,
+    Combiner_add_multi,
     Combiner_basic_low,
-    Combiner_cross_attention,
-    Combiner_transformer,
 )
 
 
@@ -52,7 +50,7 @@ class CDC(nn.Module):
         self.label_encoder = nn.Identity()
 
         # Combiner network to combine text and label features
-        self.combiner = Combiner_add(
+        self.combiner = Combiner_add_multi(
             clip_feature_dim=512,
             projection_dim=512,
             hidden_dim=d_model,

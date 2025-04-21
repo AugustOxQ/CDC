@@ -112,6 +112,7 @@ class EmbeddingManager:
             chunk_sample_ids = self.sample_ids_list[chunk_idx : chunk_idx + self.chunk_size]
             n_samples = len(chunk_sample_ids)
             embeddings_tensor = torch.zeros((n_samples, self.embedding_dim))
+            # embeddings_tensor = torch.randn(n_samples, self.embedding_dim)
             embeddings = {
                 sample_id: embeddings_tensor[i] for i, sample_id in enumerate(chunk_sample_ids)
             }

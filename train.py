@@ -111,7 +111,7 @@ def train(cfg: DictConfig, **kwargs):
 
         loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
         l2_loss = l2_regularizer(label_embedding, alpha=0.1)
-        boundary_loss = boundary_penalty(label_embedding, radius=1.0, alpha=0.1)
+        boundary_loss = boundary_penalty(label_embedding, radius=5.0, alpha=0.1)
         loss = loss_dict["total_loss"] + l2_loss + boundary_loss
 
         epoch_metrics["loss"] += loss.item()
@@ -491,10 +491,10 @@ def run(cfg: DictConfig, **kwargs):
                 print(f"Number of true cluster centers after update: {cluster_centers.size(0)}")
 
                 # update the embeddings
-                embedding_manager.update_all_chunks(
-                    sample_ids, updated_embeddings
-                )  # TODO: Stop update embeddings in the phase two training
-                embedding_manager.load_embeddings()
+                # embedding_manager.update_all_chunks(
+                #     sample_ids, updated_embeddings
+                # )  # TODO: Stop update embeddings in the phase two training
+                # embedding_manager.load_embeddings()
 
                 # Check if the saved embeddings are the same as the updated embeddings
                 # updated_embeddings_2 = embedding_manager.get_all_embeddings()[1]
