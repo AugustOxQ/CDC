@@ -171,6 +171,86 @@ class LabelContrastiveLoss(
         combined_features_neg: Optional[Tensor] = None,
         device: torch.device = device,
     ):
+        # Compute cosine similarity
+        cos_pos = F.cosine_similarity(
+            combined_features, image_features, dim=-1
+        )  # Positive contrast
+        cos_orig = F.cosine_similarity(text_features, image_features, dim=-1)  # Original contrast
+        cos_neg = F.cosine_similarity(
+            combined_features_neg, image_features, dim=-1
+        )  # Negative contrast
+
+        loss_improve = torch.clamp(
+            cos_orig + self.margin - cos_pos, min=0
+        ).mean()  # Let combined features be closer to image features
+        loss_neg = torch.clamp(
+            cos_pos - cos_neg + self.margin, min=0
+        ).mean()  # Let combined features be further from neg
+
+        loss_reg = F.mse_loss(
+            combined_features, text_features
+        )  # Regularize combined features to be close to text features #TODO Check if this brings
+
+        # loss_kl = F.mse_loss(combined_features, text_features) # Use L2 to approximate KL divergence
+        loss_kl = F.kl_div(
+            F.log_softmax(combined_features, dim=-1),
+            F.softmax(text_features, dim=-1),
+            reduction="batchmean",
+        )  # KL divergence between combined and text features
+
+        # Total loss = cosine loss + contrastive loss (if applicable)
+        total_loss = (
+            self.lambda_pos * loss_improve
+            + self.lambda_neg * loss_neg
+            + self.lambda_reg * loss_reg
+            + self.lambda_kl * loss_kl
+        )
+
+        loss_dict = {
+            "loss_improve": loss_improve,
+            "loss_neg": loss_neg,
+            "loss_reg": loss_reg,
+            "loss_kl": loss_kl,
+            "total_loss": total_loss,
+        }
+
+        if self.return_dict:
+            return loss_dict
+        else:
+            return total_loss
+
+
+class LabelContrastiveLoss2(
+    nn.Module
+):  # BUG: This is not work as expected, label embeddings should work in a different way, see notes
+    def __init__(
+        self,
+        margin: float = 0.2,
+        lambda_pos: float = 1.0,
+        lambda_neg: float = 1.0,
+        lambda_reg: float = 0.1,
+        lambda_kl: float = 0.1,
+        return_dict: bool = False,
+    ) -> None:
+        super().__init__()
+        print("Using Combined Cosine and Contrastive Loss")
+        self.margin = margin
+        self.lambda_pos = lambda_pos
+        self.lambda_neg = lambda_neg
+        self.lambda_reg = lambda_reg
+        self.lambda_kl = lambda_kl
+        self.loss_lbl = nn.CosineEmbeddingLoss(margin=margin)
+        self.return_dict = return_dict
+        # TODO Add diversity loss to encourage more diversity in the embeddings
+
+    def forward(
+        self,
+        image_features: Tensor,
+        text_features: Tensor,
+        combined_features: Tensor,
+        combined_features_neg: Optional[Tensor] = None,
+        device: torch.device = device,
+    ):
         # Batch size
         batch_size = image_features.size(0)
 

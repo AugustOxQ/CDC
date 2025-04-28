@@ -102,12 +102,12 @@ def train(cfg: DictConfig, **kwargs):
             betas=(cfg.train.betas[0], cfg.train.betas[1]),
         )
 
-        comb_emb = model.module.combine(txt_emb, txt_full, label_embedding)
+        comb_emb = model.module.combine(txt_emb, txt_full, label_embedding, epoch=epoch)
 
         label_embedding_neg = replace_with_most_different(
             label_embedding
         )  # Sample new label embeddings
-        comb_emb_neg = model.module.combine(txt_emb, txt_full, label_embedding_neg)
+        comb_emb_neg = model.module.combine(txt_emb, txt_full, label_embedding_neg, epoch=epoch)
 
         loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
         l2_loss = l2_regularizer(label_embedding, alpha=0.1)
@@ -300,6 +300,10 @@ def run(cfg: DictConfig, **kwargs):
     # Setup criteria and optimizer and scheduler
     criteria = LabelContrastiveLoss(
         margin=0.2,
+        lambda_pos=1.0,
+        lambda_neg=0,
+        lambda_reg=0,
+        lambda_kl=0.1,
         return_dict=True,
     )
     optimizer = torch.optim.AdamW(
