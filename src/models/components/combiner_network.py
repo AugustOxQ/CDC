@@ -456,9 +456,137 @@ class Combiner_add_multi(nn.Module):
         # print(self.scalar.get())
 
         # # Option1: Output is a combination of combined_featured and text_features and label_projected_features
+        # output = (
+        #     dynamic_scalar * self.output_layer(combined_features)
+        #     + (1 - dynamic_scalar) * text_features
+        # )
+
+        output = self.output_layer(combined_features)
+
+        return F.normalize(output)
+
+
+class Combiner_add_attention(nn.Module):
+    """Combiner module which once trained fuses textual and label information."""
+
+    def __init__(
+        self,
+        clip_feature_dim: int = 512,
+        projection_dim: int = 512,
+        hidden_dim: int = 512,
+        num_heads: int = 8,
+        num_layers: int = 4,
+        label_dim: int = 512,
+        warm_up_epoch: int = 5,
+    ) -> None:
+        """
+        :param clip_feature_dim: CLIP input feature dimension (e.g., 512)
+        :param projection_dim: projection dimension (e.g., 256)
+        :param hidden_dim: hidden dimension (e.g., 512)
+        :param num_heads: Number of heads in multi-head attention
+        :param num_layers: Number of transformer layers
+        """
+        super().__init__()
+
+        self.label_proj = nn.Sequential(
+            SimpleResidule(
+                input_dim=label_dim,
+                hidden_dim=hidden_dim,
+                output_dim=hidden_dim,
+                dropout_rate=0.5,
+                residual=False,
+            ),
+            SimpleResidule(
+                input_dim=hidden_dim,
+                hidden_dim=hidden_dim,
+                output_dim=hidden_dim,
+                dropout_rate=0.5,
+                residual=True,
+            ),
+            SimpleResidule(
+                input_dim=hidden_dim,
+                hidden_dim=hidden_dim,
+                output_dim=hidden_dim,
+                dropout_rate=0.5,
+                residual=True,
+            ),
+            SimpleResidule(
+                input_dim=hidden_dim,
+                hidden_dim=hidden_dim,
+                output_dim=clip_feature_dim,
+                dropout_rate=0.5,
+                residual=False,
+            ),
+        )
+
+        # Define Transformer Encoder Layer
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=clip_feature_dim,  # feature dimension
+            nhead=num_heads,
+            dim_feedforward=hidden_dim,  # feedforward hidden size
+            batch_first=True,  # (batch, seq, dim)
+            dropout=0.5,
+        )
+
+        # Stack multiple layers
+        self.combiner_layer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        self.output_layer = nn.Linear(clip_feature_dim, clip_feature_dim)
+        self.warm_up_epoch = warm_up_epoch
+
+        self.dropout = nn.Dropout(0.5)
+
+        self.dynamic_scalar = nn.Sequential(
+            nn.Linear(clip_feature_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid(),
+        )
+
+        # Larger dynamic scalar means more weight on the combined features
+        self.scalar = FixedSizeQueue(10)
+
+    def print_scalar(self):
+
+        return self.scalar.get()
+
+    def get_newest(self):
+        return self.scalar.get_newest()
+
+    @torch.jit.export
+    def forward(
+        self, text_features: Tensor, text_full: Tensor, label_features: Tensor, epoch: None
+    ) -> Tensor:
+        """Combine the text features and label features using attention.
+
+        Outputs combined features.
+        :param text_features: CLIP textual features (shape: batch, 512)
+        :param text_full: CLIP textual features with full sequence length (shape: batch, L, 512)
+        :param label_features: Label features (shape: batch, label_dim)
+        :return: combined textual features (shape: batch, 512)
+        """
+        assert (
+            len(text_full.shape) == 3
+        ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
+
+        # label_proj = F.pad(label_features, (0, text_features.shape[1] - label_features.shape[1]), mode='constant', value=0)
+        label_proj = self.label_proj(label_features)
+
+        enriched_global = text_features + label_proj
+        enriched_global_expanded = enriched_global.unsqueeze(1)
+        fused_input = torch.cat([enriched_global_expanded, text_full], dim=1)
+
+        combined_features = self.combiner_layer(fused_input)
+        # print(combined_features.shape)
+
+        dynamic_scalar = self.dynamic_scalar(combined_features).mean(dim=1)
+        self.scalar.add(dynamic_scalar.mean().item())
+
         output = (
-            dynamic_scalar * self.output_layer(combined_features)
-            + (1 - dynamic_scalar) * text_features
+            self.output_layer(combined_features.mean(dim=1))
+            + dynamic_scalar * text_features
+            + (1 - dynamic_scalar) * label_proj
         )
 
         return F.normalize(output)
@@ -726,7 +854,7 @@ class Combiner_transformer(nn.Module):
 
 
 def test_forward_variables_shape_and_type():
-    combiner = Combiner_cross_attention(
+    combiner = Combiner_add_attention(
         clip_feature_dim=512,
         projection_dim=512,
         hidden_dim=512,
@@ -739,7 +867,7 @@ def test_forward_variables_shape_and_type():
 
     for i in range(20):
         label_features = torch.randn(2, 32)
-        output = combiner.forward(text_features, text_full, label_features)
+        output = combiner.forward(text_features, text_full, label_features, 0)
         print(output.shape, f"{output[0][:10].tolist()}")
 
 

@@ -33,6 +33,7 @@ from src.utils import (
     FeatureManager,
     FolderManager,
     calculate_n_clusters_3,
+    diversity_loss,
     plot_umap,
     plot_umap_nooutlier,
     print_model_info,
@@ -110,9 +111,10 @@ def train(cfg: DictConfig, **kwargs):
         comb_emb_neg = model.module.combine(txt_emb, txt_full, label_embedding_neg, epoch=epoch)
 
         loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
-        l2_loss = l2_regularizer(label_embedding, alpha=0.1)
-        boundary_loss = boundary_penalty(label_embedding, radius=5.0, alpha=0.1)
-        loss = loss_dict["total_loss"] + l2_loss + boundary_loss
+        l2_loss = l2_regularizer(label_embedding, alpha=0.2)
+        boundary_loss = boundary_penalty(label_embedding, radius=10.0, alpha=0.2)
+        lbl_diversity_loss = diversity_loss(label_embedding, alpha=0.5)
+        loss = loss_dict["total_loss"] + l2_loss + boundary_loss + lbl_diversity_loss
 
         epoch_metrics["loss"] += loss.item()
         optimizer.zero_grad()
@@ -165,6 +167,7 @@ def train(cfg: DictConfig, **kwargs):
                 "train/loss_reg": loss_dict["loss_reg"].item(),
                 "train/loss_kl": loss_dict["loss_kl"].item(),
                 "train/l2_loss": l2_loss.item(),
+                "train/label_diversity_loss": lbl_diversity_loss.item(),
                 "train/boundary_loss": boundary_loss.item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
                 "train/dynamic_scalar": model.module.combiner.get_newest(),
@@ -299,9 +302,9 @@ def run(cfg: DictConfig, **kwargs):
 
     # Setup criteria and optimizer and scheduler
     criteria = LabelContrastiveLoss(
-        margin=0.2,
+        margin=0.3,
         lambda_pos=1.0,
-        lambda_neg=0,
+        lambda_neg=1.0,
         lambda_reg=0,
         lambda_kl=0.1,
         return_dict=True,
@@ -599,6 +602,7 @@ def run(cfg: DictConfig, **kwargs):
 
     # Save final model and merge history
     folder_manager.save_final_model(model, experiment_dir)
+    OmegaConf.save(config=cfg, f=os.path.join(experiment_dir, "config.yaml"))
 
     # Clean cuda cache
     del (

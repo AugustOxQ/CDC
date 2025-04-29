@@ -267,6 +267,23 @@ def plot_umap_nooutlier(
     return save_path
 
 
+def diversity_loss(x, alpha):
+    """
+    Encourages diversity by penalizing high similarity among embeddings.
+    x: Tensor [B, D]
+    """
+    x_norm = torch.nn.functional.normalize(x, dim=1)  # Normalize embeddings
+    similarity_matrix = torch.matmul(x_norm, x_norm.T)  # [B, B]
+
+    # Subtract identity to remove self-similarity
+    identity = torch.eye(x.size(0), device=x.device)
+    similarity_matrix = similarity_matrix * (1 - identity)
+
+    # Penalize average squared similarity
+    loss = similarity_matrix.pow(2).mean()
+    return alpha * loss
+
+
 def test_umap():
     umap_features_np = np.random.rand(10000, 2)
     umap_labels = torch.tensor([0] * 5000 + [1] * 5000, device="cpu")

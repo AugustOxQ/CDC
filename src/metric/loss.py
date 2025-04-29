@@ -263,22 +263,19 @@ class LabelContrastiveLoss2(
             combined_features_neg, image_features, dim=-1
         )  # Negative contrast
 
-        loss_improve = torch.clamp(
-            cos_orig + self.margin - cos_pos, min=0
-        ).mean()  # Let combined features be closer to image features
-        loss_neg = torch.clamp(
-            cos_pos - cos_neg + self.margin, min=0
-        ).mean()  # Let combined features be further from neg
-        loss_reg = F.mse_loss(
-            combined_features, text_features
-        )  # Regularize combined features to be close to text features #TODO Check if this brings
+        # Let combined features be closer to image features
+        loss_improve = torch.clamp(cos_orig + self.margin - cos_pos, min=0).mean()
+        # Let combined features be further from neg
+        loss_neg = torch.clamp(cos_pos - cos_neg + self.margin, min=0).mean()
+        # Regularize combined features to be close to text features
+        loss_reg = F.mse_loss(combined_features, text_features)  # TODO Check if this brings
 
-        # loss_kl = F.mse_loss(combined_features, text_features) # Use L2 to approximate KL divergence
+        # KL divergence between combined and text features
         loss_kl = F.kl_div(
             F.log_softmax(combined_features, dim=-1),
             F.softmax(text_features, dim=-1),
             reduction="batchmean",
-        )  # KL divergence between combined and text features
+        )
 
         # Total loss = cosine loss + contrastive loss (if applicable)
         total_loss = (

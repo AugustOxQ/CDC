@@ -19,6 +19,7 @@ from src.utils.inference import (
 from src.utils.manager import EmbeddingManager, FeatureManager, FolderManager
 from src.utils.tools import (
     calculate_n_clusters_3,
+    diversity_loss,
     plot_umap,
     plot_umap_nooutlier,
     print_model_info,
