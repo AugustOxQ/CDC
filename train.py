@@ -111,9 +111,9 @@ def train(cfg: DictConfig, **kwargs):
         comb_emb_neg = model.module.combine(txt_emb, txt_full, label_embedding_neg, epoch=epoch)
 
         loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
-        l2_loss = l2_regularizer(label_embedding, alpha=0.2)
-        boundary_loss = boundary_penalty(label_embedding, radius=10.0, alpha=0.2)
-        lbl_diversity_loss = diversity_loss(label_embedding, alpha=0.5)
+        l2_loss = l2_regularizer(label_embedding, alpha=0.1)
+        boundary_loss = boundary_penalty(label_embedding, radius=10.0, alpha=0.1)
+        lbl_diversity_loss = diversity_loss(label_embedding, alpha=0)
         loss = loss_dict["total_loss"] + l2_loss + boundary_loss + lbl_diversity_loss
 
         epoch_metrics["loss"] += loss.item()
@@ -306,7 +306,7 @@ def run(cfg: DictConfig, **kwargs):
         lambda_pos=1.0,
         lambda_neg=1.0,
         lambda_reg=0,
-        lambda_kl=0.1,
+        lambda_kl=0,
         return_dict=True,
     )
     optimizer = torch.optim.AdamW(

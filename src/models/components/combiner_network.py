@@ -375,37 +375,41 @@ class Combiner_add_multi(nn.Module):
         :param num_layers: Number of transformer layers
         """
         super().__init__()
-        modules = [
-            SimpleResidule(
-                input_dim=projection_dim + label_dim,
-                hidden_dim=hidden_dim,
-                output_dim=hidden_dim,
-                dropout_rate=0.5,
-                residual=False,
-            ),
-        ]
-        for _ in range(num_layers - 2):
-            modules.append(
-                SimpleResidule(
-                    input_dim=hidden_dim,
-                    hidden_dim=hidden_dim,
-                    output_dim=hidden_dim,
-                    dropout_rate=0.5,
-                    residual=False,
-                )
-            )
 
-        modules.append(
-            SimpleResidule(
-                input_dim=hidden_dim,
-                hidden_dim=hidden_dim,
-                output_dim=clip_feature_dim,
-                dropout_rate=0.5,
-                residual=False,
-            )
-        )
+        self.label_proj_layer = nn.Linear(label_dim, projection_dim)
+        nn.init.orthogonal_(self.label_proj_layer.weight)  # Orthogonal initialization
 
-        self.combiner_layer = nn.Sequential(*modules)
+        # modules = [
+        #     SimpleResidule(
+        #         input_dim=projection_dim + label_dim + clip_feature_dim, # label + label_proj + text
+        #         hidden_dim=hidden_dim,
+        #         output_dim=hidden_dim,
+        #         dropout_rate=0.5,
+        #         residual=False,
+        #     ),
+        # ]
+        # for _ in range(num_layers - 2):
+        #     modules.append(
+        #         SimpleResidule(
+        #             input_dim=hidden_dim,
+        #             hidden_dim=hidden_dim,
+        #             output_dim=hidden_dim,
+        #             dropout_rate=0.5,
+        #             residual=False,
+        #         )
+        #     )
+
+        # modules.append(
+        #     SimpleResidule(
+        #         input_dim=hidden_dim,
+        #         hidden_dim=hidden_dim,
+        #         output_dim=clip_feature_dim,
+        #         dropout_rate=0.5,
+        #         residual=False,
+        #     )
+        # )
+
+        # self.combiner_layer = nn.Sequential(*modules)
 
         self.output_layer = nn.Linear(clip_feature_dim, clip_feature_dim)
         self.warm_up_epoch = warm_up_epoch
@@ -413,7 +417,7 @@ class Combiner_add_multi(nn.Module):
         self.dropout = nn.Dropout(0.5)
 
         self.dynamic_scalar = nn.Sequential(
-            nn.Linear(projection_dim + label_dim, hidden_dim),
+            nn.Linear(projection_dim + label_dim + clip_feature_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(hidden_dim, 1),
@@ -445,23 +449,22 @@ class Combiner_add_multi(nn.Module):
         assert (
             len(text_full.shape) == 3
         ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
+        label_proj = self.label_proj_layer(label_features)
+        # raw_combined_features = torch.cat((text_features, label_features, label_proj), -1)
+        output = text_features + label_proj
 
-        raw_combined_features = torch.cat((text_features, label_features), -1)
+        # combined_features = self.combiner_layer(raw_combined_features)
 
-        combined_features = self.combiner_layer(raw_combined_features)
-
-        dynamic_scalar = self.dynamic_scalar(raw_combined_features)
-        self.scalar.add(dynamic_scalar.mean().item())
+        # dynamic_scalar = self.dynamic_scalar(raw_combined_features)
+        # self.scalar.add(dynamic_scalar.mean().item())
         # print(dynamic_scalar.shape) # (batch, 1)
         # print(self.scalar.get())
 
         # # Option1: Output is a combination of combined_featured and text_features and label_projected_features
         # output = (
-        #     dynamic_scalar * self.output_layer(combined_features)
-        #     + (1 - dynamic_scalar) * text_features
+        #     self.output_layer(combined_features)
+        #     + dynamic_scalar * text_features + (1 - dynamic_scalar) * label_proj
         # )
-
-        output = self.output_layer(combined_features)
 
         return F.normalize(output)
 
