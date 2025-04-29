@@ -126,14 +126,14 @@ def train(cfg: DictConfig, **kwargs):
         pos_neg_diff = torch.mean(torch.cosine_similarity(comb_emb, comb_emb_neg)).item()
 
         loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
-        l2_loss = l2_regularizer(label_embedding, alpha=0.1)
+        # l2_loss = l2_regularizer(label_embedding, alpha=0.1)
         boundary_loss = boundary_penalty(label_embedding, radius=10.0, alpha=0.1)
         lbl_diversity_loss = diversity_loss(label_embedding, alpha=0.1)
         text_preserve_loss = text_preserve_regularizer(txt_emb, comb_emb, alpha=0.1)
         label_change_loss = label_change_regularizer(txt_emb, comb_emb, label_embedding, alpha=0.1)
         loss = (
             loss_dict["total_loss"]
-            + l2_loss
+            # + l2_loss
             + boundary_loss
             + lbl_diversity_loss
             + text_preserve_loss
@@ -193,7 +193,7 @@ def train(cfg: DictConfig, **kwargs):
                 "train/text_preserve_loss": text_preserve_loss.item(),
                 # "train/loss_reg": loss_dict["loss_reg"].item(),
                 # "train/loss_kl": loss_dict["loss_kl"].item(),
-                "train/l2_loss": l2_loss.item(),
+                # "train/l2_loss": l2_loss.item(),
                 "train/label_diversity_loss": lbl_diversity_loss.item(),
                 "train/boundary_loss": boundary_loss.item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
