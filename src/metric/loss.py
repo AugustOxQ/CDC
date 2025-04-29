@@ -178,7 +178,7 @@ class LabelContrastiveLoss(
         cos_orig = F.cosine_similarity(text_features, image_features, dim=-1)  # Original contrast
         cos_neg = F.cosine_similarity(
             combined_features_neg, image_features, dim=-1
-        )  # Negative contrast
+        )  # Negative cvidiaontrast
 
         loss_improve = torch.clamp(
             cos_orig + self.margin - cos_pos, min=0

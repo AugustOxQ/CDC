@@ -25,7 +25,12 @@ import wandb
 from src.data.cdc_datamodule import CDC_test
 from src.data.cdc_datamodule import CDC_train_preextract as CDC_train
 from src.metric.loss import LabelContrastiveLoss
-from src.metric.regularizer import boundary_penalty, l2_regularizer
+from src.metric.regularizer import (
+    boundary_penalty,
+    l2_regularizer,
+    label_change_regularizer,
+    text_preserve_regularizer,
+)
 from src.models.cdc import CDC
 from src.models.components.clustering import Clustering
 from src.utils import (
@@ -74,7 +79,7 @@ def train(cfg: DictConfig, **kwargs):
     )
 
     model.train()
-    epoch_metrics = {"loss": 0.0, "other_metrics": {}}
+    epoch_metrics = {"loss": 0.0, "other_metrics": {}, "Label_difference": 0.0}
 
     for batch_id, batch in enumerate(tqdm(train_dataloader)):
         img_emb, txt_emb, txt_full, label_embedding, sample_id = batch
@@ -105,18 +110,38 @@ def train(cfg: DictConfig, **kwargs):
 
         comb_emb = model.module.combine(txt_emb, txt_full, label_embedding, epoch=epoch)
 
-        label_embedding_neg = replace_with_most_different(
-            label_embedding
-        )  # Sample new label embeddings
+        # label_embedding_neg = replace_with_most_different(
+        #     label_embedding
+        # )  # Sample new label embeddings
+
+        if epoch < 5:  # TODO: Use random negatives for the first 5 epochs
+            # random negatives
+            permuted_indices = torch.randperm(label_embedding.size(0))
+            label_embedding_neg = label_embedding[permuted_indices]
+        else:
+            # `hard' negatives
+            label_embedding_neg = replace_with_most_different(label_embedding)
+
         comb_emb_neg = model.module.combine(txt_emb, txt_full, label_embedding_neg, epoch=epoch)
+        pos_neg_diff = torch.mean(torch.cosine_similarity(comb_emb, comb_emb_neg)).item()
 
         loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
         l2_loss = l2_regularizer(label_embedding, alpha=0.1)
         boundary_loss = boundary_penalty(label_embedding, radius=10.0, alpha=0.1)
-        lbl_diversity_loss = diversity_loss(label_embedding, alpha=0)
-        loss = loss_dict["total_loss"] + l2_loss + boundary_loss + lbl_diversity_loss
+        lbl_diversity_loss = diversity_loss(label_embedding, alpha=0.1)
+        text_preserve_loss = text_preserve_regularizer(txt_emb, comb_emb, alpha=0.1)
+        label_change_loss = label_change_regularizer(txt_emb, comb_emb, label_embedding, alpha=0.1)
+        loss = (
+            loss_dict["total_loss"]
+            + l2_loss
+            + boundary_loss
+            + lbl_diversity_loss
+            + text_preserve_loss
+            + label_change_loss
+        )
 
         epoch_metrics["loss"] += loss.item()
+        epoch_metrics["Label_difference"] += pos_neg_diff
         optimizer.zero_grad()
         if update_label_embedding:
             optimizer_label.zero_grad()
@@ -144,7 +169,7 @@ def train(cfg: DictConfig, **kwargs):
             scheduler.step(epoch + batch_id / len(train_dataloader))
         if batch_id % log_interval == 0 or batch_id == len(train_dataloader) - 1:
             print(
-                f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}, Dynamic Scalar: {model.module.combiner.print_scalar()}"
+                f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}, Dynamic Scalar: {model.module.combiner.print_scalar()}, Cosine similarity between comb and comb_neg: {pos_neg_diff}"
             )
 
         # # After training loop, update embeddings if required
@@ -164,8 +189,10 @@ def train(cfg: DictConfig, **kwargs):
                 "train/total_loss": loss.item(),
                 "train/loss_improve": loss_dict["loss_improve"].item(),
                 "train/loss_neg": loss_dict["loss_neg"].item(),
-                "train/loss_reg": loss_dict["loss_reg"].item(),
-                "train/loss_kl": loss_dict["loss_kl"].item(),
+                "train/label_change_loss": label_change_loss.item(),
+                "train/text_preserve_loss": text_preserve_loss.item(),
+                # "train/loss_reg": loss_dict["loss_reg"].item(),
+                # "train/loss_kl": loss_dict["loss_kl"].item(),
                 "train/l2_loss": l2_loss.item(),
                 "train/label_diversity_loss": lbl_diversity_loss.item(),
                 "train/boundary_loss": boundary_loss.item(),

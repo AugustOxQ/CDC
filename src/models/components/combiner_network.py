@@ -366,6 +366,7 @@ class Combiner_add_multi(nn.Module):
         num_layers: int = 4,
         label_dim: int = 512,
         warm_up_epoch: int = 5,
+        scale_init: float = 100,
     ) -> None:
         """
         :param clip_feature_dim: CLIP input feature dimension (e.g., 512)
@@ -379,50 +380,12 @@ class Combiner_add_multi(nn.Module):
         self.label_proj_layer = nn.Linear(label_dim, projection_dim)
         nn.init.orthogonal_(self.label_proj_layer.weight)  # Orthogonal initialization
 
-        # modules = [
-        #     SimpleResidule(
-        #         input_dim=projection_dim + label_dim + clip_feature_dim, # label + label_proj + text
-        #         hidden_dim=hidden_dim,
-        #         output_dim=hidden_dim,
-        #         dropout_rate=0.5,
-        #         residual=False,
-        #     ),
-        # ]
-        # for _ in range(num_layers - 2):
-        #     modules.append(
-        #         SimpleResidule(
-        #             input_dim=hidden_dim,
-        #             hidden_dim=hidden_dim,
-        #             output_dim=hidden_dim,
-        #             dropout_rate=0.5,
-        #             residual=False,
-        #         )
-        #     )
-
-        # modules.append(
-        #     SimpleResidule(
-        #         input_dim=hidden_dim,
-        #         hidden_dim=hidden_dim,
-        #         output_dim=clip_feature_dim,
-        #         dropout_rate=0.5,
-        #         residual=False,
-        #     )
-        # )
-
-        # self.combiner_layer = nn.Sequential(*modules)
-
         self.output_layer = nn.Linear(clip_feature_dim, clip_feature_dim)
         self.warm_up_epoch = warm_up_epoch
 
         self.dropout = nn.Dropout(0.5)
 
-        self.dynamic_scalar = nn.Sequential(
-            nn.Linear(projection_dim + label_dim + clip_feature_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid(),
-        )
+        self.scale = nn.Parameter(torch.ones(1) * scale_init)
 
         # Larger dynamic scalar means more weight on the combined features
         self.scalar = FixedSizeQueue(10)
@@ -450,21 +413,9 @@ class Combiner_add_multi(nn.Module):
             len(text_full.shape) == 3
         ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
         label_proj = self.label_proj_layer(label_features)
-        # raw_combined_features = torch.cat((text_features, label_features, label_proj), -1)
-        output = text_features + label_proj
+        output = text_features + 100 * label_proj  # Or self.scale
 
-        # combined_features = self.combiner_layer(raw_combined_features)
-
-        # dynamic_scalar = self.dynamic_scalar(raw_combined_features)
-        # self.scalar.add(dynamic_scalar.mean().item())
-        # print(dynamic_scalar.shape) # (batch, 1)
-        # print(self.scalar.get())
-
-        # # Option1: Output is a combination of combined_featured and text_features and label_projected_features
-        # output = (
-        #     self.output_layer(combined_features)
-        #     + dynamic_scalar * text_features + (1 - dynamic_scalar) * label_proj
-        # )
+        self.scalar.add(self.scale.item())
 
         return F.normalize(output)
 
