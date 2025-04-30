@@ -131,7 +131,7 @@ def train(cfg: DictConfig, **kwargs):
         #     label_embedding
         # )  # Sample new label embeddings
 
-        if epoch < 5:  # TODO: Use random negatives for the first 5 epochs
+        if epoch == 0:  # TODO: Use random negatives for the first 5 epochs
             # random negatives
             permuted_indices = torch.randperm(label_embedding.size(0))
             label_embedding_neg = label_embedding[permuted_indices]
@@ -146,13 +146,15 @@ def train(cfg: DictConfig, **kwargs):
         # l2_loss = l2_regularizer(label_embedding, alpha=0.1)
         boundary_loss = boundary_penalty(label_embedding, radius=10.0, alpha=0.1)
         lbl_diversity_loss = diversity_loss(label_embedding, alpha=0.1)
-        text_preserve_loss = text_preserve_regularizer(txt_emb, comb_emb, alpha=0.1)
-        label_change_loss = label_change_regularizer(txt_emb, comb_emb, label_embedding, alpha=0.1)
+        text_preserve_loss = text_preserve_regularizer(txt_emb, comb_emb, alpha=0.01)
+        label_change_loss = label_change_regularizer(
+            txt_emb, comb_emb, label_embedding, alpha=0.01
+        )
         loss = (
             loss_dict["total_loss"]
             # + l2_loss
             + boundary_loss
-            + lbl_diversity_loss
+            # + lbl_diversity_loss
             + text_preserve_loss
             + label_change_loss
         )

@@ -385,7 +385,15 @@ class Combiner_add_multi(nn.Module):
 
         self.dropout = nn.Dropout(0.5)
 
-        self.scale = nn.Parameter(torch.ones(1) * scale_init)
+        # self.scale = nn.Parameter(torch.ones(1) * scale_init)
+
+        self.dynamic_scalar = nn.Sequential(
+            nn.Linear(projection_dim + label_dim + clip_feature_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid(),
+        )
 
         # Larger dynamic scalar means more weight on the combined features
         self.scalar = FixedSizeQueue(10)
@@ -415,7 +423,7 @@ class Combiner_add_multi(nn.Module):
         label_proj = self.label_proj_layer(label_features)
         output = text_features + 100 * label_proj  # Or self.scale
 
-        self.scalar.add(self.scale.item())
+        # self.scalar.add(self.scale.item())
 
         return F.normalize(output)
 
