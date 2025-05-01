@@ -57,20 +57,21 @@ transformers.logging.set_verbosity_error()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class LinearReWarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
+class StepwiseReWarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
     def __init__(self, optimizer, T_cycle, eta_min=1e-6, last_epoch=-1):
         self.T_cycle = T_cycle
         self.eta_min = eta_min
         super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
-        e = self.last_epoch
-        e_mod = e % self.T_cycle
+        epoch = self.last_epoch  # scheduler.step() should be called once per *epoch*
+        e_mod = epoch % self.T_cycle
         lrs = []
 
         for base_lr in self.base_lrs:
-            lr = base_lr - (base_lr - self.eta_min) * (e_mod / self.T_cycle)
-            lrs.append(lr)
+            new_lr = base_lr - (base_lr - self.eta_min) * (e_mod / self.T_cycle)
+            lrs.append(new_lr)
+
         return lrs
 
 
@@ -365,7 +366,7 @@ def run(cfg: DictConfig, **kwargs):
     #     optimizer, T_0=cfg.train.warm_up, T_mult=1, eta_min=cfg.train.lr_min
     # )
 
-    scheduler = LinearReWarmupScheduler(
+    scheduler = StepwiseReWarmupScheduler(
         optimizer,
         T_cycle=cfg.train.warm_up,
         eta_min=cfg.train.lr_min,
