@@ -334,10 +334,10 @@ def run(cfg: DictConfig, **kwargs):
     # Setup criteria and optimizer and scheduler
     criteria = LabelContrastiveLoss(
         margin=0.3,
-        lambda_pos=0.3,
+        lambda_pos=0.1,
         lambda_neg=1.0,
-        lambda_labelchange=0.1,
-        lambda_preserve=0.1,
+        lambda_labelchange=0.5,
+        lambda_preserve=0.2,
         return_dict=True,
     )
     optimizer = torch.optim.AdamW(

@@ -422,9 +422,7 @@ class Combiner_add_multi(nn.Module):
         ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
         label_proj = self.label_proj_layer(label_features)
         output = text_features + self.scale * label_proj  # Or self.scale
-
-        # self.scalar.add(self.scale.item())
-
+        self.scalar.add(self.scale.item())
         return F.normalize(output)
 
 
