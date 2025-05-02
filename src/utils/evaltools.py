@@ -940,7 +940,7 @@ def eval_rank_oracle_check_per_label(
                 all_txt_full[i : i + batch_size],
                 label_emb[i : i + batch_size],
             ).detach()
-            print(model.module.combiner.print_scalar())
+            # print(model.module.combiner.print_scalar())
             comb_emb.append(tmp_comb_embeds)
         comb_emb = torch.cat(comb_emb, dim=0)
 

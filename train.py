@@ -9,6 +9,7 @@ from turtle import update
 import hydra
 import numpy as np
 import torch
+import torch.nn.functional as F
 import transformers
 from omegaconf import DictConfig, OmegaConf
 from scipy.spatial.distance import cdist
@@ -25,12 +26,6 @@ import wandb
 from src.data.cdc_datamodule import CDC_test
 from src.data.cdc_datamodule import CDC_train_preextract as CDC_train
 from src.metric.loss import LabelContrastiveLoss
-from src.metric.regularizer import (
-    boundary_penalty,
-    l2_regularizer,
-    label_change_regularizer,
-    text_preserve_regularizer,
-)
 from src.models.cdc import CDC
 from src.models.components.clustering import Clustering
 from src.utils import (
@@ -141,24 +136,16 @@ def train(cfg: DictConfig, **kwargs):
             label_embedding_neg = replace_with_most_different(label_embedding)
 
         comb_emb_neg = model.module.combine(txt_emb, txt_full, label_embedding_neg, epoch=epoch)
-        pos_neg_diff = torch.mean(torch.cosine_similarity(comb_emb, comb_emb_neg)).item()
+        emb1_norm = F.normalize(comb_emb, p=2, dim=1)
+        emb2_norm = F.normalize(comb_emb_neg, p=2, dim=1)
+        sim_pos_neg = emb1_norm @ emb2_norm.T
+        triu_indices = torch.triu_indices(sim_pos_neg.size(0), sim_pos_neg.size(1), offset=1)
+        upper_vals = sim_pos_neg[triu_indices[0], triu_indices[1]]
+        pos_neg_diff = torch.mean(upper_vals).item()
 
-        loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg)
-        # l2_loss = l2_regularizer(label_embedding, alpha=0.1)
-        boundary_loss = boundary_penalty(label_embedding, radius=10.0, alpha=0.1)
-        lbl_diversity_loss = diversity_loss(label_embedding, alpha=0.1)
-        text_preserve_loss = text_preserve_regularizer(txt_emb, comb_emb, alpha=0.01)
-        label_change_loss = label_change_regularizer(
-            txt_emb, comb_emb, label_embedding, alpha=0.01
-        )
-        loss = (
-            loss_dict["total_loss"]
-            # + l2_loss
-            + boundary_loss
-            # + lbl_diversity_loss
-            + text_preserve_loss
-            + label_change_loss
-        )
+        loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg, label_embedding)
+
+        loss = loss_dict["total_loss"]
 
         epoch_metrics["loss"] += loss.item()
         epoch_metrics["Label_difference"] += pos_neg_diff
@@ -209,14 +196,11 @@ def train(cfg: DictConfig, **kwargs):
                 "train/total_loss": loss.item(),
                 "train/loss_improve": loss_dict["loss_improve"].item(),
                 "train/loss_neg": loss_dict["loss_neg"].item(),
-                "train/label_change_loss": label_change_loss.item(),
-                "train/text_preserve_loss": text_preserve_loss.item(),
-                # "train/loss_reg": loss_dict["loss_reg"].item(),
-                # "train/loss_kl": loss_dict["loss_kl"].item(),
-                # "train/l2_loss": l2_loss.item(),
-                "train/label_diversity_loss": lbl_diversity_loss.item(),
-                "train/boundary_loss": boundary_loss.item(),
+                "train/label_change_loss": loss_dict["loss_label_change"].item(),
+                "train/text_preserve_loss": loss_dict["loss_preserve"].item(),
+                "train/boundary_loss": loss_dict["loss_boundary"].item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
+                "train/diversity": pos_neg_diff,
                 "train/dynamic_scalar": model.module.combiner.get_newest(),
             },
         )
@@ -350,10 +334,10 @@ def run(cfg: DictConfig, **kwargs):
     # Setup criteria and optimizer and scheduler
     criteria = LabelContrastiveLoss(
         margin=0.3,
-        lambda_pos=1.0,
+        lambda_pos=0.3,
         lambda_neg=1.0,
-        lambda_reg=0,
-        lambda_kl=0,
+        lambda_labelchange=0.1,
+        lambda_preserve=0.1,
         return_dict=True,
     )
     optimizer = torch.optim.AdamW(
@@ -428,6 +412,12 @@ def run(cfg: DictConfig, **kwargs):
             # if epoch == k_means_end_epoch:
             # update_label_embedding = False
             # print("##########Cease label embedding updates##########")
+
+            if epoch == 5:
+                # stop updating this layer
+                for param in model.module.combiner.parameters():
+                    param.requires_grad = False
+                print("##########Stop updating label projection layer##########")
 
             train_epoch_log = train(
                 cfg,
@@ -663,7 +653,7 @@ def run(cfg: DictConfig, **kwargs):
     return logger
 
 
-@hydra.main(config_path="configs", config_name="flickr30k_mini", version_base=None)
+@hydra.main(config_path="configs", config_name="redcaps", version_base=None)
 def main(cfg):
     # Set seed
     seed = cfg.seed

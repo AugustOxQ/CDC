@@ -366,7 +366,7 @@ class Combiner_add_multi(nn.Module):
         num_layers: int = 4,
         label_dim: int = 512,
         warm_up_epoch: int = 5,
-        scale_init: float = 100,
+        scale_init: float = 5,
     ) -> None:
         """
         :param clip_feature_dim: CLIP input feature dimension (e.g., 512)
@@ -385,7 +385,7 @@ class Combiner_add_multi(nn.Module):
 
         self.dropout = nn.Dropout(0.5)
 
-        # self.scale = nn.Parameter(torch.ones(1) * scale_init)
+        self.scale = nn.Parameter(torch.ones(1) * scale_init)
 
         self.dynamic_scalar = nn.Sequential(
             nn.Linear(projection_dim + label_dim + clip_feature_dim, hidden_dim),
@@ -421,7 +421,7 @@ class Combiner_add_multi(nn.Module):
             len(text_full.shape) == 3
         ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
         label_proj = self.label_proj_layer(label_features)
-        output = text_features + 100 * label_proj  # Or self.scale
+        output = text_features + self.scale * label_proj  # Or self.scale
 
         # self.scalar.add(self.scale.item())
 

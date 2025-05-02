@@ -7,6 +7,13 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from src.metric.regularizer import (
+    boundary_penalty,
+    l2_regularizer,
+    label_change_regularizer,
+    text_preserve_regularizer,
+)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -145,11 +152,11 @@ class LabelContrastiveLoss(
 ):  # BUG: This is not work as expected, label embeddings should work in a different way, see notes
     def __init__(
         self,
-        margin: float = 0.2,
-        lambda_pos: float = 1.0,
+        margin: float = 0.3,
+        lambda_pos: float = 0.1,
         lambda_neg: float = 1.0,
-        lambda_reg: float = 0.1,
-        lambda_kl: float = 0.1,
+        lambda_labelchange: float = 0.1,
+        lambda_preserve: float = 0.1,
         return_dict: bool = False,
     ) -> None:
         super().__init__()
@@ -157,9 +164,8 @@ class LabelContrastiveLoss(
         self.margin = margin
         self.lambda_pos = lambda_pos
         self.lambda_neg = lambda_neg
-        self.lambda_reg = lambda_reg
-        self.lambda_kl = lambda_kl
-        self.loss_lbl = nn.CosineEmbeddingLoss(margin=margin)
+        self.lambda_labelchange = lambda_labelchange
+        self.lambda_preserve = lambda_preserve
         self.return_dict = return_dict
         # TODO Add diversity loss to encourage more diversity in the embeddings
 
@@ -168,8 +174,8 @@ class LabelContrastiveLoss(
         image_features: Tensor,
         text_features: Tensor,
         combined_features: Tensor,
-        combined_features_neg: Optional[Tensor] = None,
-        device: torch.device = device,
+        combined_features_neg: Tensor,
+        label_embedding: Tensor,
     ):
         # Compute cosine similarity
         cos_pos = F.cosine_similarity(
@@ -187,30 +193,31 @@ class LabelContrastiveLoss(
             cos_pos - cos_neg + self.margin, min=0
         ).mean()  # Let combined features be further from neg
 
-        loss_reg = F.mse_loss(
-            combined_features, text_features
-        )  # Regularize combined features to be close to text features #TODO Check if this brings
+        label_change_loss = label_change_regularizer(
+            text_features, text_features, label_embedding, alpha=self.lambda_labelchange
+        )
 
-        # loss_kl = F.mse_loss(combined_features, text_features) # Use L2 to approximate KL divergence
-        loss_kl = F.kl_div(
-            F.log_softmax(combined_features, dim=-1),
-            F.softmax(text_features, dim=-1),
-            reduction="batchmean",
-        )  # KL divergence between combined and text features
+        text_preserve_loss = text_preserve_regularizer(
+            text_features, text_features, alpha=self.lambda_preserve
+        )
+
+        boundary_loss = boundary_penalty(label_embedding, radius=10.0, alpha=0.1)
 
         # Total loss = cosine loss + contrastive loss (if applicable)
         total_loss = (
             self.lambda_pos * loss_improve
             + self.lambda_neg * loss_neg
-            + self.lambda_reg * loss_reg
-            + self.lambda_kl * loss_kl
+            + label_change_loss
+            + text_preserve_loss
+            + boundary_loss
         )
 
         loss_dict = {
             "loss_improve": loss_improve,
             "loss_neg": loss_neg,
-            "loss_reg": loss_reg,
-            "loss_kl": loss_kl,
+            "loss_label_change": label_change_loss,
+            "loss_preserve": text_preserve_loss,
+            "loss_boundary": boundary_loss,
             "total_loss": total_loss,
         }
 
