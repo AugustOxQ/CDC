@@ -379,21 +379,12 @@ class Combiner_add_multi(nn.Module):
 
         self.label_proj_layer = nn.Linear(label_dim, projection_dim)
         nn.init.orthogonal_(self.label_proj_layer.weight)  # Orthogonal initialization
+        for param in self.label_proj_layer.parameters():  # Freeze
+            param.requires_grad = False
 
-        self.output_layer = nn.Linear(clip_feature_dim, clip_feature_dim)
         self.warm_up_epoch = warm_up_epoch
 
-        self.dropout = nn.Dropout(0.5)
-
-        self.scale = nn.Parameter(torch.ones(1) * scale_init)
-
-        self.dynamic_scalar = nn.Sequential(
-            nn.Linear(projection_dim + label_dim + clip_feature_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid(),
-        )
+        self.scale = nn.Parameter(torch.ones(projection_dim) * scale_init)
 
         # Larger dynamic scalar means more weight on the combined features
         self.scalar = FixedSizeQueue(10)
@@ -407,8 +398,13 @@ class Combiner_add_multi(nn.Module):
 
     @torch.jit.export
     def forward(
-        self, text_features: Tensor, text_full: Tensor, label_features: Tensor, epoch: None
-    ) -> Tensor:
+        self,
+        text_features: Tensor,
+        text_full: Tensor,
+        label_features: Tensor,
+        epoch: None,
+        return_label_proj: bool = False,
+    ) -> tuple[Tensor, Tensor] | Tensor:
         """Combine the text features and label features using attention.
 
         Outputs combined features.
@@ -420,10 +416,13 @@ class Combiner_add_multi(nn.Module):
         assert (
             len(text_full.shape) == 3
         ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
-        label_proj = self.label_proj_layer(label_features)
-        output = text_features + self.scale * label_proj  # Or self.scale
-        self.scalar.add(self.scale.item())
-        return F.normalize(output)
+        label_proj = F.normalize(self.label_proj_layer(label_features))
+        output = text_features + self.scale * label_proj  # Or F.normalize(label_proj)
+        self.scalar.add(self.scale.mean().item())
+        if return_label_proj:
+            return F.normalize(output), label_proj
+        else:
+            return F.normalize(output)
 
 
 class Combiner_add_attention(nn.Module):
@@ -517,7 +516,7 @@ class Combiner_add_attention(nn.Module):
     @torch.jit.export
     def forward(
         self, text_features: Tensor, text_full: Tensor, label_features: Tensor, epoch: None
-    ) -> Tensor:
+    ) -> tuple[Tensor, Tensor]:
         """Combine the text features and label features using attention.
 
         Outputs combined features.
@@ -549,7 +548,7 @@ class Combiner_add_attention(nn.Module):
             + (1 - dynamic_scalar) * label_proj
         )
 
-        return F.normalize(output)
+        return F.normalize(output), label_proj
 
 
 class Combiner_add_multi2(nn.Module):

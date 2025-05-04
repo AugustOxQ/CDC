@@ -13,13 +13,13 @@ def l2_regularizer(embeddings, alpha=0.1):
     return alpha * torch.mean(l2_norm**2)  # Return the mean L2 norm with scaling
 
 
-def text_preserve_regularizer(text_features, combined_features, tau=0.3, alpha=0.1):
+def text_preserve_regularizer(text_features, combined_features, tau=0.2, alpha=0.1):
     delta = (combined_features - text_features).norm(dim=-1)  # [B]
     excess_change = F.relu(delta - tau)
     return alpha * excess_change.pow(2).mean()
 
 
-def label_change_regularizer(text_features, combined_features, label_features, tau=0.3, alpha=0.1):
+def label_change_regularizer(text_features, combined_features, label_features, tau=0.2, alpha=0.1):
     delta = (combined_features - text_features).norm(dim=-1)  # [B]
     label_norm = label_features.norm(dim=-1)  # [B]
 

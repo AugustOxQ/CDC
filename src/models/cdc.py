@@ -84,10 +84,12 @@ class CDC(nn.Module):
 
         return img_emb, txt_emb, img_full, txt_full
 
-    def combine(self, txt_emb, txt_full, labels, epoch=None):
+    def combine(self, txt_emb, txt_full, labels, epoch=None, return_label_proj=False):
         # Encode the labels
         lbl_emb = self.label_encoder(labels)  # (batch_size, 512)
-        comb_emb = self.combiner(txt_emb, txt_full, lbl_emb, epoch)  # (batch_size, 512)
+        comb_emb = self.combiner(
+            txt_emb, txt_full, lbl_emb, epoch, return_label_proj
+        )  # (batch_size, 512)
 
         return comb_emb
 

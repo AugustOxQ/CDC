@@ -52,7 +52,7 @@ transformers.logging.set_verbosity_error()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class StepwiseReWarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
+class EpochLinearRewarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
     def __init__(self, optimizer, T_cycle, eta_min=1e-6, last_epoch=-1):
         self.T_cycle = T_cycle
         self.eta_min = eta_min
@@ -121,7 +121,9 @@ def train(cfg: DictConfig, **kwargs):
             betas=(cfg.train.betas[0], cfg.train.betas[1]),
         )
 
-        comb_emb = model.module.combine(txt_emb, txt_full, label_embedding, epoch=epoch)
+        comb_emb, label_embedding_proj = model.module.combine(
+            txt_emb, txt_full, label_embedding, epoch=epoch, return_label_proj=True
+        )
 
         # label_embedding_neg = replace_with_most_different(
         #     label_embedding
@@ -135,7 +137,9 @@ def train(cfg: DictConfig, **kwargs):
             # `hard' negatives
             label_embedding_neg = replace_with_most_different(label_embedding)
 
-        comb_emb_neg = model.module.combine(txt_emb, txt_full, label_embedding_neg, epoch=epoch)
+        comb_emb_neg = model.module.combine(
+            txt_emb, txt_full, label_embedding_neg, epoch=epoch, return_label_proj=False
+        )
         emb1_norm = F.normalize(comb_emb, p=2, dim=1)
         emb2_norm = F.normalize(comb_emb_neg, p=2, dim=1)
         sim_pos_neg = emb1_norm @ emb2_norm.T
@@ -143,7 +147,7 @@ def train(cfg: DictConfig, **kwargs):
         upper_vals = sim_pos_neg[triu_indices[0], triu_indices[1]]
         pos_neg_diff = torch.mean(upper_vals).item()
 
-        loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg, label_embedding)
+        loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg, label_embedding_proj)
 
         loss = loss_dict["total_loss"]
 
@@ -172,8 +176,6 @@ def train(cfg: DictConfig, **kwargs):
         # embedding_buffer.append((batch_id, sample_id, label_embedding.clone().detach()))
 
         # Log
-        if scheduler is not None:
-            scheduler.step(epoch + batch_id / len(train_dataloader))
         if batch_id % log_interval == 0 or batch_id == len(train_dataloader) - 1:
             print(
                 f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}, Dynamic Scalar: {model.module.combiner.print_scalar()}, Cosine similarity between comb and comb_neg: {pos_neg_diff}"
@@ -214,6 +216,11 @@ def train(cfg: DictConfig, **kwargs):
         )
 
         torch.cuda.empty_cache()
+
+    if (
+        scheduler is not None
+    ):  # TODO: For epochwise scheduler to work, it needs to be called after every epoch
+        scheduler.step()
 
     return epoch_metrics
 
@@ -333,8 +340,8 @@ def run(cfg: DictConfig, **kwargs):
 
     # Setup criteria and optimizer and scheduler
     criteria = LabelContrastiveLoss(
-        margin=0.3,
-        lambda_pos=0.1,
+        margin=0.2,
+        lambda_pos=0.5,
         lambda_neg=1.0,
         lambda_labelchange=0.5,
         lambda_preserve=0.2,
@@ -350,7 +357,7 @@ def run(cfg: DictConfig, **kwargs):
     #     optimizer, T_0=cfg.train.warm_up, T_mult=1, eta_min=cfg.train.lr_min
     # )
 
-    scheduler = StepwiseReWarmupScheduler(
+    scheduler = EpochLinearRewarmupScheduler(
         optimizer,
         T_cycle=cfg.train.warm_up,
         eta_min=cfg.train.lr_min,
@@ -413,11 +420,11 @@ def run(cfg: DictConfig, **kwargs):
             # update_label_embedding = False
             # print("##########Cease label embedding updates##########")
 
-            if epoch == 5:
+            if epoch == 10:
                 # stop updating this layer
                 for param in model.module.combiner.parameters():
                     param.requires_grad = False
-                print("##########Stop updating label projection layer##########")
+                print("##########Stop updating Combiner Network##########")
 
             train_epoch_log = train(
                 cfg,
