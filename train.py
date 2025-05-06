@@ -521,10 +521,10 @@ def run(cfg: DictConfig, **kwargs):
                     n_clusters=0,
                     method="eom",
                 )
-                umap_labels, _ = clustering.get_kmeans(
-                    umap_features_high,
-                    n_clusters=50,
-                )
+                # umap_labels, _ = clustering.get_kmeans(
+                #     umap_features_high,
+                #     n_clusters=50,
+                # )
                 unique_umap_labels = torch.unique(umap_labels)
                 print(f"Unique UMAP labels: {unique_umap_labels.size(0)}")
 
