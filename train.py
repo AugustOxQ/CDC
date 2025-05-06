@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import random
 import warnings
@@ -15,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 from scipy.spatial.distance import cdist
 from sklearn.cluster import KMeans
 from torch import nn
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer
@@ -51,23 +52,25 @@ warnings.filterwarnings("ignore")
 transformers.logging.set_verbosity_error()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+WARM_UP_EPOCH = 3
 
-class EpochLinearRewarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
-    def __init__(self, optimizer, T_cycle, eta_min=1e-6, last_epoch=-1):
-        self.T_cycle = T_cycle
-        self.eta_min = eta_min
-        super().__init__(optimizer, last_epoch)
 
-    def get_lr(self):
-        epoch = self.last_epoch  # scheduler.step() should be called once per *epoch*
-        e_mod = epoch % self.T_cycle
-        lrs = []
-
-        for base_lr in self.base_lrs:
-            new_lr = base_lr - (base_lr - self.eta_min) * (e_mod / self.T_cycle)
-            lrs.append(new_lr)
-
-        return lrs
+def annealing_rewarmup_schedule(
+    epoch: int,
+    warmup_epochs: int = WARM_UP_EPOCH,
+    T_cycle: int = 10,
+    initial_lr: float = 1e-3,
+    lr_min: float = 1e-9,
+):
+    if epoch < warmup_epochs + 1:
+        t = epoch / (warmup_epochs)
+        return (1 - t) * 1.0 + t * (lr_min / initial_lr)
+    else:
+        # Adjusted epoch count after warmup
+        t = (epoch - warmup_epochs) % T_cycle
+        cosine_decay = 0.5 * (1 + math.cos(math.pi * t / T_cycle))
+        min_scale = lr_min / initial_lr
+        return min_scale + (1 - min_scale) * cosine_decay
 
 
 def train(cfg: DictConfig, **kwargs):
@@ -129,13 +132,13 @@ def train(cfg: DictConfig, **kwargs):
         #     label_embedding
         # )  # Sample new label embeddings
 
-        if epoch == 0:  # TODO: Use random negatives for the first 5 epochs
-            # random negatives
-            permuted_indices = torch.randperm(label_embedding.size(0))
-            label_embedding_neg = label_embedding[permuted_indices]
-        else:
-            # `hard' negatives
-            label_embedding_neg = replace_with_most_different(label_embedding)
+        # if epoch < WARM_UP_EPOCH:  # TODO: Use random negatives for the first 5 epochs
+        #     # random negatives
+        #     permuted_indices = torch.randperm(label_embedding.size(0))
+        #     label_embedding_neg = label_embedding[permuted_indices]
+        # else:
+        #     # `hard' negatives
+        label_embedding_neg = replace_with_most_different(label_embedding)
 
         comb_emb_neg = model.module.combine(
             txt_emb, txt_full, label_embedding_neg, epoch=epoch, return_label_proj=False
@@ -147,28 +150,32 @@ def train(cfg: DictConfig, **kwargs):
         upper_vals = sim_pos_neg[triu_indices[0], triu_indices[1]]
         pos_neg_diff = torch.mean(upper_vals).item()
 
-        loss_dict = criteria(img_emb, txt_emb, comb_emb, comb_emb_neg, label_embedding_proj)
-
-        loss = loss_dict["total_loss"]
+        loss_dict = criteria(
+            img_emb, txt_emb, comb_emb, comb_emb_neg, label_embedding, label_embedding_proj
+        )
+        if epoch < WARM_UP_EPOCH:
+            loss = loss_dict["early_loss"]
+        else:
+            loss = loss_dict["total_loss"]
 
         epoch_metrics["loss"] += loss.item()
         epoch_metrics["Label_difference"] += pos_neg_diff
         optimizer.zero_grad()
-        if update_label_embedding:
-            optimizer_label.zero_grad()
+        # if update_label_embedding:
+        optimizer_label.zero_grad()
         loss.backward()
         optimizer.step()
-        if update_label_embedding:
-            optimizer_label.step()
+        # if update_label_embedding:
+        optimizer_label.step()
 
-            # # Check if label_embedding is updated
-            # diff = torch.sum(label_embedding - label_embedding_cp)
-            # if update_label_embedding:
-            #     assert diff != 0, "Label embedding should be updated after backward pass"
-            # else:
-            #     assert (
-            #         diff == 0
-            #     ), "Label embedding should not be updated after backward pass"
+        # # Check if label_embedding is updated
+        # diff = torch.sum(label_embedding - label_embedding_cp)
+        # if update_label_embedding:
+        #     assert diff != 0, "Label embedding should be updated after backward pass"
+        # else:
+        #     assert (
+        #         diff == 0
+        #     ), "Label embedding should not be updated after backward pass"
 
         # if update_label_embedding:
         embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding)
@@ -195,11 +202,14 @@ def train(cfg: DictConfig, **kwargs):
         wandb_run.log(
             {
                 "train/epoch": epoch,
-                "train/total_loss": loss.item(),
+                "train/total_loss": loss_dict["total_loss"].item(),
                 "train/loss_improve": loss_dict["loss_improve"].item(),
                 "train/loss_neg": loss_dict["loss_neg"].item(),
                 "train/label_change_loss": loss_dict["loss_label_change"].item(),
                 "train/text_preserve_loss": loss_dict["loss_preserve"].item(),
+                "train/loss_angular": loss_dict["loss_angular"].item(),
+                "train/loss_pull_away": loss_dict["loss_pull_away"].item(),
+                "train/loss_entropy": loss_dict["loss_entropy"].item(),
                 "train/boundary_loss": loss_dict["loss_boundary"].item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
                 "train/diversity": pos_neg_diff,
@@ -340,11 +350,11 @@ def run(cfg: DictConfig, **kwargs):
 
     # Setup criteria and optimizer and scheduler
     criteria = LabelContrastiveLoss(
-        margin=0.2,
-        lambda_pos=0.5,
+        margin=0.3,
+        lambda_pos=1.0,
         lambda_neg=1.0,
-        lambda_labelchange=0.5,
-        lambda_preserve=0.2,
+        lambda_labelchange=0,
+        lambda_preserve=0,
         return_dict=True,
     )
     optimizer = torch.optim.AdamW(
@@ -353,14 +363,17 @@ def run(cfg: DictConfig, **kwargs):
         weight_decay=cfg.train.weight_decay,
         betas=(cfg.train.betas[0], cfg.train.betas[1]),
     )
-    # scheduler = CosineAnnealingWarmRestarts(
-    #     optimizer, T_0=cfg.train.warm_up, T_mult=1, eta_min=cfg.train.lr_min
-    # )
 
-    scheduler = EpochLinearRewarmupScheduler(
+    scheduler = LambdaLR(
         optimizer,
-        T_cycle=cfg.train.warm_up,
-        eta_min=cfg.train.lr_min,
+        lr_lambda=lambda epoch: annealing_rewarmup_schedule(
+            epoch,
+            warmup_epochs=WARM_UP_EPOCH,
+            T_cycle=cfg.train.warm_up,
+            # initial_lr=cfg.train.lr,
+            initial_lr=5e-2,
+            lr_min=cfg.train.lr_min,
+        ),
     )
 
     # Callbacks
@@ -420,11 +433,10 @@ def run(cfg: DictConfig, **kwargs):
             # update_label_embedding = False
             # print("##########Cease label embedding updates##########")
 
-            if epoch == 10:
-                # stop updating this layer
-                for param in model.module.combiner.parameters():
-                    param.requires_grad = False
-                print("##########Stop updating Combiner Network##########")
+            if epoch == WARM_UP_EPOCH:
+                model.module.combiner.freeze_switch_modulation()
+            # if epoch == 10:
+            # model.module.combiner.freeze_all_modulation()
 
             train_epoch_log = train(
                 cfg,
@@ -481,9 +493,8 @@ def run(cfg: DictConfig, **kwargs):
 
             # Perform clustering and update embeddings by merging
             if (
-                k_means_start_epoch
-                <= epoch
-                < k_means_end_epoch
+                k_means_start_epoch <= epoch < k_means_end_epoch
+                and epoch % WARM_UP_EPOCH == 0
                 # and n_clusters_list[max(epoch - 1, 0)] != n_clusters
             ):
                 print(
@@ -496,13 +507,23 @@ def run(cfg: DictConfig, **kwargs):
 
                 # Perform UMAP and clustering on unique embeddings
                 print("##########Performing UMAP for computation##########")
-                umap_features_high = clustering.get_umap(
-                    label_embedding, n_components=cfg.train_2.umap_components
-                )
+                if label_embedding[0].shape[0] == 2:
+                    umap_features_high = label_embedding.clone()
+                    print("skip umap reduction")
+                else:
+                    umap_features_high = clustering.get_umap(
+                        label_embedding, n_components=cfg.train_2.umap_components
+                    )
 
                 print("##########Performing Clustering##########")
                 umap_labels, _ = clustering.get_hdbscan(
-                    umap_features_high, n_clusters=n_clusters, method="leaf"
+                    umap_features_high,
+                    n_clusters=0,
+                    method="eom",
+                )
+                umap_labels, _ = clustering.get_kmeans(
+                    umap_features_high,
+                    n_clusters=50,
                 )
                 unique_umap_labels = torch.unique(umap_labels)
                 print(f"Unique UMAP labels: {unique_umap_labels.size(0)}")
@@ -539,11 +560,12 @@ def run(cfg: DictConfig, **kwargs):
 
                 print(f"Number of true cluster centers after update: {cluster_centers.size(0)}")
 
+                # if (epoch) % 5 == 0:
                 # update the embeddings
-                # embedding_manager.update_all_chunks(
-                #     sample_ids, updated_embeddings
-                # )  # TODO: Stop update embeddings in the phase two training
-                # embedding_manager.load_embeddings()
+                embedding_manager.update_all_chunks(
+                    sample_ids, updated_embeddings
+                )  # TODO: Stop update embeddings in the phase two training
+                embedding_manager.load_embeddings()
 
                 # Check if the saved embeddings are the same as the updated embeddings
                 # updated_embeddings_2 = embedding_manager.get_all_embeddings()[1]
@@ -563,9 +585,16 @@ def run(cfg: DictConfig, **kwargs):
                     # Plot UMAP before clustering update
 
                     print("##########Performing UMAP for visualisation##########")
-                    umap_features, updated_umap_features = clustering.get_and_predict_umap(
-                        label_embedding, updated_embeddings
-                    )
+                    if label_embedding[0].shape[0] == 2:
+                        umap_features, updated_umap_features = (
+                            label_embedding.clone(),
+                            updated_embeddings.clone(),
+                        )
+                        print("skip umap reduction for visualization")
+                    else:
+                        umap_features, updated_umap_features = clustering.get_and_predict_umap(
+                            label_embedding, updated_embeddings
+                        )
 
                     umap_features_np = umap_features.cpu().numpy()
                     umap_labels_np = umap_labels.cpu().numpy()
@@ -641,10 +670,12 @@ def run(cfg: DictConfig, **kwargs):
 
         # Save logger per epoch
         logger.append(logger_epoch)
+        OmegaConf.save(config=cfg, f=os.path.join(experiment_dir, "config.yaml"))
+        folder_manager.save_final_model(model.module.combiner, experiment_dir)
 
     # Save final model and merge history
-    folder_manager.save_final_model(model, experiment_dir)
-    OmegaConf.save(config=cfg, f=os.path.join(experiment_dir, "config.yaml"))
+    # folder_manager.save_final_model(model, experiment_dir)
+    # OmegaConf.save(config=cfg, f=os.path.join(experiment_dir, "config.yaml"))
 
     # Clean cuda cache
     del (

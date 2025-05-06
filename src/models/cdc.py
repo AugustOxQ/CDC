@@ -7,10 +7,8 @@ import torch.nn.init
 from transformers import CLIPModel
 
 from src.models.components import (
-    Combiner_add,
-    Combiner_add_attention,
     Combiner_add_multi,
-    Combiner_basic_low,
+    CombinerGated,
 )
 
 

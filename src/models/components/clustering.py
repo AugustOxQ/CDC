@@ -143,7 +143,7 @@ class Clustering:
         n_clusters,
         min_cluster_size=100,
         min_sample=50,
-        method="eom",
+        method="leaf",
     ):  # leaf or eom
         self.initialize_cluster()
 

@@ -111,31 +111,30 @@ def sample_label_embeddings(label_embeddings):
     return sampled_label_embeddings
 
 
-def replace_with_most_different(label_embeddings):
-    """Replace each label embedding with the one that differs the most from it, based on cosine
-    distance.
-
-    :param label_embeddings: Tensor of shape [batch, 512]
-    :return: Tensor of shape [batch, 512] with replaced embeddings
-    """
+def replace_with_most_different(label_embeddings, k=10):
     batch_size = label_embeddings.size(0)
 
-    # Normalize the embeddings to compute cosine similarity
-    normalized_embeddings = F.normalize(label_embeddings, p=2, dim=1)
+    # Normalize the embeddings
+    normalized = F.normalize(label_embeddings, p=2, dim=1)
 
-    # Compute pairwise cosine similarity
-    cosine_sim_matrix = torch.matmul(normalized_embeddings, normalized_embeddings.T)
+    # Compute cosine similarity and distance
+    cosine_sim = torch.matmul(normalized, normalized.T)
+    cosine_dist = 1 - cosine_sim
 
-    # Convert cosine similarity to cosine distance (1 - similarity)
-    cosine_dist_matrix = 1 - cosine_sim_matrix
+    # Fill diagonal with large negative to avoid self-match
+    cosine_dist.fill_diagonal_(-float("inf"))
 
-    # For each embedding, find the index of the embedding with the maximum distance
-    max_dist_indices = torch.argmax(cosine_dist_matrix, dim=1)
+    # Get indices of top-k most dissimilar embeddings
+    topk_indices = torch.topk(cosine_dist, k=k, dim=1).indices  # [B, k]
 
-    # Replace each label embedding with the one that differs the most (max distance)
-    new_label_embeddings = label_embeddings[max_dist_indices]
+    # Sample one index from top-k for each row
+    rand_indices = torch.randint(0, k, (batch_size,), device=label_embeddings.device)
+    selected_indices = topk_indices[torch.arange(batch_size), rand_indices]
 
-    return new_label_embeddings
+    # Gather new embeddings
+    new_embeddings = label_embeddings[selected_indices]
+
+    return new_embeddings
 
 
 def compute_recall_at_k(similarities, k):
