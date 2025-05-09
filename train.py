@@ -134,7 +134,7 @@ def train(cfg: DictConfig, **kwargs):
         )
         label_embedding_cp = label_embedding.clone().detach()
 
-        base_lr = optimizer.param_groups[0]["lr"]
+        base_lr = optimizer.get_last_lr()
         optimizer.add_param_group(
             {"params": [label_embedding], "lr": base_lr * 5e4}
         )  # Add label embedding to optimizer
@@ -216,11 +216,6 @@ def train(cfg: DictConfig, **kwargs):
         )
 
         torch.cuda.empty_cache()
-
-    if (
-        scheduler is not None
-    ):  # TODO: For epochwise scheduler to work, it needs to be called after every epoch
-        scheduler.step()
 
     return epoch_metrics
 
@@ -536,10 +531,10 @@ def run(cfg: DictConfig, **kwargs):
 
                 # if (epoch) % 5 == 0:
                 # update the embeddings
-                # embedding_manager.update_all_chunks(
-                #     sample_ids, updated_embeddings
-                # )  # TODO: Stop update embeddings in the phase two training
-                # embedding_manager.load_embeddings()
+                embedding_manager.update_all_chunks(
+                    sample_ids, updated_embeddings
+                )  # TODO: Stop update embeddings in the phase two training
+                embedding_manager.load_embeddings()
 
                 # Check if the saved embeddings are the same as the updated embeddings
                 # updated_embeddings_2 = embedding_manager.get_all_embeddings()[1]
