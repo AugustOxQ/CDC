@@ -9,6 +9,15 @@ import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def copy_all_files(src_path, dst_base):
+    os.makedirs(dst_base, exist_ok=True)
+    for filename in os.listdir(src_path):
+        src_file = os.path.join(src_path, filename)
+        dst_file = os.path.join(dst_base, filename)
+        if os.path.isfile(src_file):
+            shutil.copy2(src_file, dst_file)  # preserves metadata
+
+
 class FeatureManager:
     def __init__(self, features_dir, chunk_size):
         self.features_dir = features_dir
@@ -63,6 +72,7 @@ class EmbeddingManager:
         embeddings_dir="embeddings",
         load_existing=False,
         sample_ids_list: list[int] = [0, 1],
+        use_template=True,
     ):
         self.annotations = annotations
         self.embedding_dim = embedding_dim
@@ -80,6 +90,9 @@ class EmbeddingManager:
         self.index_mapping = {}
         self.embedding_references = {}
         self.merge_history = defaultdict(set)  # Track merge history
+        self.init_template = "local_ckpt/init"
+
+        self.use_template = use_template
 
         if load_existing:
             self.load_embeddings()
@@ -111,17 +124,22 @@ class EmbeddingManager:
 
             chunk_sample_ids = self.sample_ids_list[chunk_idx : chunk_idx + self.chunk_size]
             n_samples = len(chunk_sample_ids)
-            # embeddings_tensor = torch.zeros((n_samples, self.embedding_dim))
-            embeddings_tensor = torch.randn(n_samples, self.embedding_dim) * 0.01
-            embeddings = {
-                sample_id: embeddings_tensor[i] for i, sample_id in enumerate(chunk_sample_ids)
-            }
+
+            if not self.use_template:
+                # embeddings_tensor = torch.zeros((n_samples, self.embedding_dim))
+                embeddings_tensor = torch.randn(n_samples, self.embedding_dim) * 0.01
+                embeddings = {
+                    sample_id: embeddings_tensor[i] for i, sample_id in enumerate(chunk_sample_ids)
+                }
+                torch.save(embeddings, chunk_file)
             # Update index mappings
             for i, sample_id in enumerate(chunk_sample_ids):
                 self.index_mapping[sample_id] = (chunk_file, sample_id)
                 self.embedding_references[sample_id] = sample_id
 
-            torch.save(embeddings, chunk_file)
+        if self.use_template:
+            print("Copying template files to embeddings directory...")
+            copy_all_files(self.init_template, self.embeddings_dir)
 
     def load_embeddings(self):
         # Load existing embeddings from chunk files

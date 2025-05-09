@@ -163,3 +163,5 @@ wandb/
 plot/
 .qodo
 .history/
+
+local_ckpt/

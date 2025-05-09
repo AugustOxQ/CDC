@@ -387,11 +387,11 @@ class Combiner_add_multi(nn.Module):
         self.scale = nn.Parameter(
             torch.ones(projection_dim) * scale_init
         )  # Control magnitude and semantic shift
-        self.scale.requires_grad = True
+        self.scale.requires_grad = False
         self.scale2 = nn.Parameter(
             torch.ones(projection_dim) * scale_init
         )  # Control directional shift
-        self.scale2.requires_grad = True
+        self.scale2.requires_grad = False
 
         # Larger dynamic scalar means more weight on the combined features
         self.scalar = FixedSizeQueue(10)
@@ -403,14 +403,11 @@ class Combiner_add_multi(nn.Module):
         return self.scalar.get_newest()
 
     def freeze_switch_modulation(self):
-        self.scale.requires_grad = True
-        self.scale2.requires_grad = False
-        # print("Freeze scale and switch to update scale2")
+        pass
 
     def freeze_all_modulation(self):
         self.scale.requires_grad = False
         self.scale2.requires_grad = False
-        print("Freeze all modulation")
 
     @torch.jit.export
     def forward(
@@ -420,7 +417,7 @@ class Combiner_add_multi(nn.Module):
         label_features: Tensor,
         epoch: None,
         return_label_proj: bool = False,
-    ) -> tuple[Tensor, Tensor] | Tensor:
+    ):
         """Combine the text features and label features using attention.
 
         Outputs combined features.
@@ -432,17 +429,14 @@ class Combiner_add_multi(nn.Module):
         assert (
             len(text_full.shape) == 3
         ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
-        label_proj = self.scale * F.normalize(self.scale2 * self.label_proj_layer(label_features))
-        output = text_features + label_proj  # Or F.normalize(label_proj)
+        label_proj = self.label_proj_layer(label_features)
+        output = F.normalize(text_features + label_proj, dim=-1)
 
-        if self.scale.requires_grad:
-            self.scalar.add(self.scale.mean().item())
-        else:
-            self.scalar.add(self.scale2.mean().item())
+        self.scalar.add(label_proj.mean().item())
         if return_label_proj:
-            return F.normalize(output), label_proj
+            return output, label_proj
         else:
-            return F.normalize(output)
+            return output
 
 
 class CombinerGated(nn.Module):
@@ -468,27 +462,31 @@ class CombinerGated(nn.Module):
             param.requires_grad = False
 
         self.warm_up_epoch = warm_up_epoch
-        self.scalar = FixedSizeQueue(10)
+        self.scalar = FixedSizeQueue(2)
 
         # Learnable channel-wise scale (optional)
         self.scale = nn.Parameter(torch.ones(projection_dim) * scale_init)
 
+        gamma_middle = nn.Linear(projection_dim + clip_feature_dim + label_dim, clip_feature_dim)
+        nn.init.zeros_(gamma_middle.weight)
+        nn.init.zeros_(gamma_middle.bias)
+
         # Gating and additive shift (trainable)
         self.gamma = nn.Sequential(
-            nn.LayerNorm(projection_dim),
-            nn.Linear(projection_dim, clip_feature_dim),
+            nn.LayerNorm(projection_dim + clip_feature_dim + label_dim),
+            gamma_middle,
             nn.Tanh(),  # Output around [-1, 1]
         )
+
+        beta_middle = nn.Linear(projection_dim, clip_feature_dim)
+        beta_middle.weight.data.copy_(torch.eye(clip_feature_dim))
+        nn.init.zeros_(beta_middle.bias)
 
         # Beta: additive semantic shift
         self.beta = nn.Sequential(
             nn.LayerNorm(projection_dim),
-            nn.Linear(projection_dim, clip_feature_dim),
-            # nn.ReLU(),
-            # nn.Linear(hidden_dim, projection_dim),
+            beta_middle,
         )
-        nn.init.orthogonal_(self.beta[1].weight)
-        self.frozen = False
 
     def print_scalar(self):
         return self.scalar.get()
@@ -513,16 +511,18 @@ class CombinerGated(nn.Module):
         label_features: Tensor,  # [B, label_dim]
         epoch: int,
         return_label_proj: bool = False,
-    ) -> tuple[Tensor, Tensor] | Tensor:
+    ):
 
-        label_proj = F.normalize(self.label_proj_layer(label_features), dim=-1)
+        label_proj = self.label_proj_layer(label_features)
+        raw_cat = torch.cat((label_proj, text_features, label_features), dim=-1)  # [B, 512 + 512]
 
         # Gated modulation
-        gamma = self.gamma(label_proj)  # [B, 512]
+        gamma = self.gamma(raw_cat)  # [B, 512]
         beta = self.beta(label_proj)  # [B, 512]
         combined = text_features + gamma * text_features + beta
 
-        self.scalar.add(self.scale.mean().item())
+        self.scalar.add(gamma.mean().item())
+        self.scalar.add(beta.mean().item())
 
         if return_label_proj:
             return F.normalize(combined, dim=-1), label_proj
@@ -558,9 +558,56 @@ class Combiner_add_multi_tmp(nn.Module):
         for param in self.label_proj_layer.parameters():  # Freeze
             param.requires_grad = False
 
+        self.text_proj_layer = nn.Linear(clip_feature_dim, projection_dim)
+
         self.warm_up_epoch = warm_up_epoch
 
-        self.scale = nn.Parameter(torch.ones(projection_dim) * scale_init)
+        modules = [
+            SimpleResidule(
+                input_dim=projection_dim + label_dim + clip_feature_dim,
+                hidden_dim=hidden_dim,
+                output_dim=hidden_dim,
+                dropout_rate=0.5,
+                residual=False,
+            ),
+        ]
+
+        if num_layers > 2:
+            for _ in range(num_layers - 2):
+                modules.append(
+                    SimpleResidule(
+                        input_dim=hidden_dim,
+                        hidden_dim=hidden_dim,
+                        output_dim=hidden_dim,
+                        dropout_rate=0.5,
+                        residual=True,
+                    )
+                )
+
+        modules.append(
+            SimpleResidule(
+                input_dim=hidden_dim,
+                hidden_dim=hidden_dim,
+                output_dim=clip_feature_dim,
+                dropout_rate=0.5,
+                residual=False,
+            )
+        )
+
+        self.combiner_layer = nn.Sequential(*modules)
+
+        self.output_layer = nn.Linear(clip_feature_dim, clip_feature_dim)
+        self.warm_up_epoch = warm_up_epoch
+
+        self.dropout = nn.Dropout(0.5)
+
+        self.dynamic_scalar = nn.Sequential(
+            nn.Linear(projection_dim + label_dim + clip_feature_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid(),
+        )
 
         # Larger dynamic scalar means more weight on the combined features
         self.scalar = FixedSizeQueue(10)
@@ -572,6 +619,19 @@ class Combiner_add_multi_tmp(nn.Module):
     def get_newest(self):
         return self.scalar.get_newest()
 
+    def freeze_switch_modulation(self):
+        pass
+
+    def freeze_all_modulation(self):
+        for p in self.text_proj_layer.parameters():
+            p.requires_grad = False
+        for p in self.combiner_layer.parameters():
+            p.requires_grad = False
+        for p in self.output_layer.parameters():
+            p.requires_grad = False
+        for p in self.dynamic_scalar.parameters():
+            p.requires_grad = False
+
     @torch.jit.export
     def forward(
         self,
@@ -580,7 +640,7 @@ class Combiner_add_multi_tmp(nn.Module):
         label_features: Tensor,
         epoch: None,
         return_label_proj: bool = False,
-    ) -> tuple[Tensor, Tensor] | Tensor:
+    ):
         """Combine the text features and label features using attention.
 
         Outputs combined features.
@@ -593,8 +653,19 @@ class Combiner_add_multi_tmp(nn.Module):
             len(text_full.shape) == 3
         ), f"text_full should be of shape (batch, L, 512), instead get {text_full.shape}"
         label_proj = F.normalize(self.label_proj_layer(label_features))
-        output = text_features + self.scale * label_proj  # Or F.normalize(label_proj)
-        self.scalar.add(self.scale.mean().item())
+        raw_combined_features = torch.cat((label_proj, text_features, label_features), -1)
+
+        combined_features = self.combiner_layer(raw_combined_features)
+
+        dynamic_scalar = self.dynamic_scalar(raw_combined_features)
+        self.scalar.add(dynamic_scalar.mean().item())
+
+        # # Option1: Output is a combination of combined_featured and text_features and label_projected_features
+        output = (
+            self.output_layer(combined_features)
+            + (1 - dynamic_scalar) * text_features
+            + dynamic_scalar * label_proj
+        )
         if return_label_proj:
             return F.normalize(output), label_proj
         else:

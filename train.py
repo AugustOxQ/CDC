@@ -16,7 +16,11 @@ from omegaconf import DictConfig, OmegaConf
 from scipy.spatial.distance import cdist
 from sklearn.cluster import KMeans
 from torch import nn
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR
+from torch.optim.lr_scheduler import (
+    CosineAnnealingLR,
+    CosineAnnealingWarmRestarts,
+    LambdaLR,
+)
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer
@@ -52,25 +56,22 @@ warnings.filterwarnings("ignore")
 transformers.logging.set_verbosity_error()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-WARM_UP_EPOCH = 3
+WARM_UP_EPOCH = 0
+K_means_gap = 1
+USE_TEMPLATE = True
 
 
 def annealing_rewarmup_schedule(
     epoch: int,
-    warmup_epochs: int = WARM_UP_EPOCH,
-    T_cycle: int = 10,
+    T_max: int = 10,
     initial_lr: float = 1e-3,
     lr_min: float = 1e-9,
 ):
-    if epoch < warmup_epochs + 1:
-        t = epoch / (warmup_epochs)
-        return (1 - t) * 1.0 + t * (lr_min / initial_lr)
-    else:
-        # Adjusted epoch count after warmup
-        t = (epoch - warmup_epochs) % T_cycle
-        cosine_decay = 0.5 * (1 + math.cos(math.pi * t / T_cycle))
-        min_scale = lr_min / initial_lr
-        return min_scale + (1 - min_scale) * cosine_decay
+    # Adjusted epoch count after warmup
+    t = epoch / T_max
+    cosine_decay = 0.5 * (1 + math.cos(math.pi * t / T_max))
+    min_scale = lr_min / initial_lr
+    return min_scale + (1 - min_scale) * cosine_decay
 
 
 def train(cfg: DictConfig, **kwargs):
@@ -81,21 +82,37 @@ def train(cfg: DictConfig, **kwargs):
     epoch = kwargs["epoch"]
     scheduler = kwargs["scheduler"]
     embedding_manager = kwargs["embedding_manager"]
-    update_label_embedding = kwargs["update_label_embedding"]
     log_interval = cfg.train.log_interval
     wandb_run = kwargs["wandb_run"]
 
-    tmp_gap = min(cfg.train_2.k_means_end_epoch - epoch, 0)  # control label embedding lr
-    label_lr_max = cfg.train.label_lr
-    label_lr_min = cfg.train.label_lr_min
-
-    # interpolate label embedding lr
-    current_lr = label_lr_max - (label_lr_max - label_lr_min) * (
-        tmp_gap / (cfg.train_2.k_means_end_epoch)
-    )
-
     model.train()
-    epoch_metrics = {"loss": 0.0, "other_metrics": {}, "Label_difference": 0.0}
+    epoch_metrics = {"loss": 0.0, "other_metrics": {}}
+
+    if epoch == 0 and not USE_TEMPLATE:
+        # Initialize label embedding
+        w_t = model.module.combiner.label_proj_layer.weight.data.clone().detach().to(device)
+        print("##########Initializing label embedding to compensate for the image##########")
+        for batch_id, batch in enumerate(tqdm(train_dataloader)):
+            img_emb, txt_emb, _, label_embedding, sample_id = batch
+            img_emb, txt_emb, label_embedding = (
+                img_emb.squeeze(0),
+                txt_emb.squeeze(0),
+                label_embedding.squeeze(0),
+            )
+
+            img_emb, txt_emb = (
+                img_emb.to(device, non_blocking=True),
+                txt_emb.to(device, non_blocking=True),
+            )
+
+            label_embedding_init = (img_emb - txt_emb) @ w_t
+            embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding_init)
+
+            if batch_id % log_interval == 0 or batch_id == len(train_dataloader) - 1:
+                label_move_distance = torch.norm(label_embedding, p=2, dim=1).mean()
+                print(
+                    f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Label Move Distance: {label_move_distance:.3f}"
+                )
 
     for batch_id, batch in enumerate(tqdm(train_dataloader)):
         img_emb, txt_emb, txt_full, label_embedding, sample_id = batch
@@ -115,40 +132,21 @@ def train(cfg: DictConfig, **kwargs):
         label_embedding = (
             label_embedding.to(device, non_blocking=True).clone().detach().requires_grad_(True)
         )
-        # label_embedding_cp = label_embedding.clone().detach()
+        label_embedding_cp = label_embedding.clone().detach()
 
-        optimizer_label = torch.optim.AdamW(
-            [label_embedding],
-            lr=current_lr,
-            weight_decay=cfg.train.weight_decay,
-            betas=(cfg.train.betas[0], cfg.train.betas[1]),
-        )
+        base_lr = optimizer.param_groups[0]["lr"]
+        optimizer.add_param_group(
+            {"params": [label_embedding], "lr": base_lr * 5e4}
+        )  # Add label embedding to optimizer
 
         comb_emb, label_embedding_proj = model.module.combine(
             txt_emb, txt_full, label_embedding, epoch=epoch, return_label_proj=True
         )
-
-        # label_embedding_neg = replace_with_most_different(
-        #     label_embedding
-        # )  # Sample new label embeddings
-
-        # if epoch < WARM_UP_EPOCH:  # TODO: Use random negatives for the first 5 epochs
-        #     # random negatives
-        #     permuted_indices = torch.randperm(label_embedding.size(0))
-        #     label_embedding_neg = label_embedding[permuted_indices]
-        # else:
-        #     # `hard' negatives
         label_embedding_neg = replace_with_most_different(label_embedding)
 
         comb_emb_neg = model.module.combine(
             txt_emb, txt_full, label_embedding_neg, epoch=epoch, return_label_proj=False
         )
-        emb1_norm = F.normalize(comb_emb, p=2, dim=1)
-        emb2_norm = F.normalize(comb_emb_neg, p=2, dim=1)
-        sim_pos_neg = emb1_norm @ emb2_norm.T
-        triu_indices = torch.triu_indices(sim_pos_neg.size(0), sim_pos_neg.size(1), offset=1)
-        upper_vals = sim_pos_neg[triu_indices[0], triu_indices[1]]
-        pos_neg_diff = torch.mean(upper_vals).item()
 
         loss_dict = criteria(
             img_emb, txt_emb, comb_emb, comb_emb_neg, label_embedding, label_embedding_proj
@@ -159,14 +157,11 @@ def train(cfg: DictConfig, **kwargs):
             loss = loss_dict["total_loss"]
 
         epoch_metrics["loss"] += loss.item()
-        epoch_metrics["Label_difference"] += pos_neg_diff
         optimizer.zero_grad()
-        # if update_label_embedding:
-        optimizer_label.zero_grad()
         loss.backward()
         optimizer.step()
-        # if update_label_embedding:
-        optimizer_label.step()
+
+        optimizer.param_groups.pop()  # Popout label embedding from optimizer
 
         # # Check if label_embedding is updated
         # diff = torch.sum(label_embedding - label_embedding_cp)
@@ -180,25 +175,21 @@ def train(cfg: DictConfig, **kwargs):
         # if update_label_embedding:
         embedding_manager.update_chunk_embeddings(batch_id, sample_id, label_embedding)
 
-        # embedding_buffer.append((batch_id, sample_id, label_embedding.clone().detach()))
-
         # Log
         if batch_id % log_interval == 0 or batch_id == len(train_dataloader) - 1:
+            label_move_distance = torch.norm(
+                label_embedding - label_embedding_cp, p=2, dim=1
+            ).mean()
+            emb1_norm = F.normalize(comb_emb, p=2, dim=1)
+            emb2_norm = F.normalize(comb_emb_neg, p=2, dim=1)
+            sim_pos_neg = emb1_norm @ emb2_norm.T
+            triu_indices = torch.triu_indices(sim_pos_neg.size(0), sim_pos_neg.size(1), offset=1)
+            upper_vals = sim_pos_neg[triu_indices[0], triu_indices[1]]
+            pos_neg_diff = torch.mean(upper_vals).item()
             print(
-                f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item()}, Dynamic Scalar: {model.module.combiner.print_scalar()}, Cosine similarity between comb and comb_neg: {pos_neg_diff}"
+                f"Epoch: {epoch}, Batch: {batch_id} / {len(train_dataloader)-1 }, Loss: {loss.item():.3f}, Dynamic Scalar: {model.module.combiner.print_scalar()}, Cosine Similarity (pos-neg): {pos_neg_diff:.4f}, Label Move Distance: {label_move_distance:.7f}"
             )
 
-        # # After training loop, update embeddings if required
-        # if (batch_id + 1) % update_frequency == 0 or batch_id == len(
-        #     train_dataloader
-        # ) - 1:
-        #     for b_id, s_id, emb in embedding_buffer:
-        #         embedding_manager.update_chunk_embeddings(b_id, s_id, emb)
-        #     print(
-        #         f"Updated {len(embedding_buffer)} embeddings in the buffer to the embedding manager"
-        #     )
-        #     embedding_buffer.clear()
-        # # Wandb logger
         wandb_run.log(
             {
                 "train/epoch": epoch,
@@ -209,7 +200,6 @@ def train(cfg: DictConfig, **kwargs):
                 "train/text_preserve_loss": loss_dict["loss_preserve"].item(),
                 "train/loss_angular": loss_dict["loss_angular"].item(),
                 "train/loss_pull_away": loss_dict["loss_pull_away"].item(),
-                "train/loss_entropy": loss_dict["loss_entropy"].item(),
                 "train/boundary_loss": loss_dict["loss_boundary"].item(),
                 "train/lr": optimizer.param_groups[0]["lr"],
                 "train/diversity": pos_neg_diff,
@@ -251,7 +241,7 @@ def run(cfg: DictConfig, **kwargs):
     model.to(device)
 
     # Print model summary
-    print_model_info(model)
+    print_model_info(model.module.combiner)
 
     # preprocess = AutoImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
     # tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
@@ -304,6 +294,7 @@ def run(cfg: DictConfig, **kwargs):
         chunk_size=cfg.train.batch_size,
         embeddings_dir=init_dir,
         sample_ids_list=sample_ids_list,
+        use_template=USE_TEMPLATE,
     )
     embedding_manager.load_embeddings()
 
@@ -353,8 +344,8 @@ def run(cfg: DictConfig, **kwargs):
         margin=0.3,
         lambda_pos=1.0,
         lambda_neg=1.0,
-        lambda_labelchange=0,
-        lambda_preserve=0,
+        lambda_labelchange=0.1,
+        lambda_preserve=0.1,
         return_dict=True,
     )
     optimizer = torch.optim.AdamW(
@@ -364,17 +355,22 @@ def run(cfg: DictConfig, **kwargs):
         betas=(cfg.train.betas[0], cfg.train.betas[1]),
     )
 
-    scheduler = LambdaLR(
+    scheduler = CosineAnnealingLR(
         optimizer,
-        lr_lambda=lambda epoch: annealing_rewarmup_schedule(
-            epoch,
-            warmup_epochs=WARM_UP_EPOCH,
-            T_cycle=cfg.train.warm_up,
-            # initial_lr=cfg.train.lr,
-            initial_lr=5e-2,
-            lr_min=cfg.train.lr_min,
-        ),
+        T_max=cfg.train.max_epochs,
+        eta_min=cfg.train.lr_min,
+        last_epoch=-1,
     )
+
+    # scheduler = LambdaLR(
+    #     optimizer,
+    #     lr_lambda=lambda epoch: annealing_rewarmup_schedule(
+    #         epoch,
+    #         T_max=cfg.train.warm_up,
+    #         initial_lr=cfg.train.lr,
+    #         lr_min=cfg.train.lr_min,
+    #     ),
+    # )
 
     # Callbacks
     logger = []
@@ -433,8 +429,8 @@ def run(cfg: DictConfig, **kwargs):
             # update_label_embedding = False
             # print("##########Cease label embedding updates##########")
 
-            if epoch == WARM_UP_EPOCH:
-                model.module.combiner.freeze_switch_modulation()
+            # if epoch == WARM_UP_EPOCH:
+            #     model.module.combiner.freeze_switch_modulation()
             # if epoch == 10:
             # model.module.combiner.freeze_all_modulation()
 
@@ -462,24 +458,6 @@ def run(cfg: DictConfig, **kwargs):
             wandb_run.log(inf_train_log)
             logger_epoch["inference_train"] = inf_train_log
 
-        if cfg.control.test:
-            if unique_embeddings is not None:
-
-                kmeans = KMeans(n_clusters=min(50, unique_embeddings.shape[0])).fit(
-                    unique_embeddings.cpu().numpy()
-                )
-                centroids = kmeans.cluster_centers_
-                # Find closest real embedding to each centroid
-
-                indices = np.argmin(cdist(centroids, unique_embeddings), axis=1)
-                representatives = unique_embeddings[indices]
-                print("##########Testing test dataset##########")
-                inf_test_log = inference_test(
-                    model, processor, test_dataloader, representatives, epoch, device
-                )
-                logger_epoch["inference_test"] = inf_test_log
-                wandb_run.log(inf_test_log)
-
         if cfg.control.train_2:  # KMeans update
             n_clusters = n_clusters_list[epoch]  # Number of clusters for the current epoch
             # An adaptive alpha which minimum 0.1 and maximum 0.9, slide depends on k_means_middle_epoch - k_means_start_epoch
@@ -492,11 +470,7 @@ def run(cfg: DictConfig, **kwargs):
             )
 
             # Perform clustering and update embeddings by merging
-            if (
-                k_means_start_epoch <= epoch < k_means_end_epoch
-                and epoch % WARM_UP_EPOCH == 0
-                # and n_clusters_list[max(epoch - 1, 0)] != n_clusters
-            ):
+            if k_means_start_epoch <= epoch < k_means_end_epoch and epoch % K_means_gap == 0:
                 print(
                     f"##########Epoch {epoch}: Expected number of clusters: {n_clusters}##########"
                 )
@@ -562,10 +536,10 @@ def run(cfg: DictConfig, **kwargs):
 
                 # if (epoch) % 5 == 0:
                 # update the embeddings
-                embedding_manager.update_all_chunks(
-                    sample_ids, updated_embeddings
-                )  # TODO: Stop update embeddings in the phase two training
-                embedding_manager.load_embeddings()
+                # embedding_manager.update_all_chunks(
+                #     sample_ids, updated_embeddings
+                # )  # TODO: Stop update embeddings in the phase two training
+                # embedding_manager.load_embeddings()
 
                 # Check if the saved embeddings are the same as the updated embeddings
                 # updated_embeddings_2 = embedding_manager.get_all_embeddings()[1]
@@ -646,6 +620,24 @@ def run(cfg: DictConfig, **kwargs):
                     unique_embeddings,  # Increase the number of embeddings to save to 300
                     os.path.join(experiment_dir, "unique_embeddings.pt"),
                 )
+
+        if cfg.control.test:
+            if unique_embeddings is not None:
+
+                kmeans = KMeans(n_clusters=min(50, unique_embeddings.shape[0])).fit(
+                    unique_embeddings.cpu().numpy()
+                )
+                centroids = kmeans.cluster_centers_
+                # Find closest real embedding to each centroid
+
+                indices = np.argmin(cdist(centroids, unique_embeddings), axis=1)
+                representatives = unique_embeddings[indices]
+                print("##########Testing test dataset##########")
+                inf_test_log = inference_test(
+                    model, processor, test_dataloader, representatives, epoch, device
+                )
+                logger_epoch["inference_test"] = inf_test_log
+                wandb_run.log(inf_test_log)
 
             # elif epoch >= k_means_middle_epoch:
             #     # print("##########No clustering##########")

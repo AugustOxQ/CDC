@@ -157,10 +157,10 @@ class LabelContrastiveLoss(
         margin: float = 0.2,
         lambda_pos: float = 1.0,
         lambda_neg: float = 1.0,
-        lambda_labelchange: float = 0,
-        lambda_preserve: float = 0,
-        lambda_angular: float = 0,
-        lambda_pull_away: float = 0,
+        lambda_labelchange: float = 0.1,
+        lambda_preserve: float = 0.1,
+        lambda_angular: float = 0.5,
+        lambda_pull_away: float = 0.5,
         return_dict: bool = False,
     ) -> None:
         super().__init__()
@@ -201,8 +201,6 @@ class LabelContrastiveLoss(
         ).mean()  # Let combined features be further from neg
 
         label_change_loss = label_change_regularizer(
-            combined_features, text_features, label_embedding, alpha=self.lambda_labelchange
-        ) + label_change_regularizer(
             combined_features, text_features, label_embedding_proj, alpha=self.lambda_labelchange
         )
 
@@ -210,7 +208,7 @@ class LabelContrastiveLoss(
             combined_features, text_features, alpha=self.lambda_preserve
         )
 
-        boundary_loss = boundary_penalty(label_embedding, radius=10.0, alpha=0.1)
+        boundary_loss = boundary_penalty(label_embedding, radius=3.0, alpha=0.1)
 
         angular_loss = angular_consistency_loss(
             label_embedding_proj, text_features, combined_features, alpha=self.lambda_angular
@@ -218,30 +216,20 @@ class LabelContrastiveLoss(
 
         pull_away_loss = pull_away_diversity_loss(
             label_embedding_proj, alpha=self.lambda_pull_away
-        )  # + pull_away_diversity_loss(
-        #     label_embedding_proj, alpha=self.lambda_pull_away
-        # )
+        )
 
-        entropy_loss_value = (
-            entropy_loss(label_embedding_proj, alpha=self.lambda_pull_away) + 4
-        )  # + entropy_loss(
-        #    label_embedding_proj, alpha=self.lambda_pull_away
-        # ) + 4
-
-        # Total loss = cosine loss + contrastive loss (if applicable)
         total_loss = (
             self.lambda_pos * loss_improve
             + self.lambda_neg * loss_neg
-            + label_change_loss
-            + text_preserve_loss
             + angular_loss
             + pull_away_loss
-            + entropy_loss_value
+            + self.lambda_labelchange * label_change_loss
+            + self.lambda_preserve * text_preserve_loss
             + boundary_loss
         )
 
         # Before first k epoch, we not contrast, but rather fully improve over original
-        early_loss = loss_improve + boundary_loss  # + 0.05 * loss_neg
+        early_loss = loss_improve + boundary_loss  # + 0.5 * loss_neg
 
         loss_dict = {
             "loss_improve": loss_improve,
@@ -250,7 +238,6 @@ class LabelContrastiveLoss(
             "loss_preserve": text_preserve_loss,
             "loss_angular": angular_loss,
             "loss_pull_away": pull_away_loss,
-            "loss_entropy": entropy_loss_value,
             "loss_boundary": boundary_loss,
             "total_loss": total_loss,
             "early_loss": early_loss,
